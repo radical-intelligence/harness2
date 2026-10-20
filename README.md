@@ -177,7 +177,8 @@ applicable. They include task summaries, deliverables, adopted harnesses,
 reflection notes, and evaluation results.
 
 Repeat the same command to resume. Use a new `HARNESS2_RUNS_DIR` when changing
-models or task selection. See [results and resume](docs/EXPERIMENTS.md#results-and-resume)
+models, the Google Cloud project or region, the judge or Codex endpoint, or task
+selection. See [results and resume](docs/EXPERIMENTS.md#results-and-resume)
 for details; each command also supports `--help`.
 
 ## Citation

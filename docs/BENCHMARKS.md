@@ -64,8 +64,10 @@ and empty completions. Rubrics stay outside the improver's evidence.
 With a Gemini `HARNESS2_JUDGE_MODEL`, the judge uses the project's Vertex
 OpenAI-compatible endpoint and Application Default Credentials. For a separate
 judge provider, set `HARNESS2_JUDGE_BASE_URL`, `HARNESS2_JUDGE_API_KEY`, and the
-model ID that endpoint accepts. The reported score uses the upstream rubric
-weights; unscored tasks are reported separately. Results are under `runs/jb/`.
+model ID that endpoint accepts; the ID is sent as written. Without
+`HARNESS2_JUDGE_API_KEY`, a `gcloud` access token is sent to the endpoint
+instead. The reported score uses the upstream rubric weights; unscored tasks are
+reported separately. Results are under `runs/jb/`.
 
 Note: JobBench data, including `RUBRICS.json`, is public on Hugging Face, so an
 executor with web access may retrieve it. Block those hosts during runs as
