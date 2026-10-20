@@ -64,8 +64,9 @@ SUBSET=web bash scripts/run_workbuddy.sh --max-tasks 1
 ## Reproducibility
 
 When comparing budgets or modes, keep task selection, executor, improver, judge,
-and web access fixed. Use a distinct `HARNESS2_RUNS_DIR` when changing models or
-task selection; the saved configuration prevents incompatible resumes.
+and web access fixed. Use a distinct `HARNESS2_RUNS_DIR` when changing models, the
+Google Cloud project or region, the judge or Codex endpoint, or task selection; the
+saved configuration prevents incompatible resumes.
 
 JobBench's dataset is resolved at download time rather than pinned to a commit.
 Setup records the downloaded Hugging Face revision in
@@ -115,8 +116,17 @@ The default output roots are `runs/lab/`, `runs/jb/`, and
 harnesses, reflection notes, and graded results.
 
 Repeat the same command to resume. Failed evaluations remain unscored rather
-than being counted as zero. Use a new `HARNESS2_RUNS_DIR` when changing models or
-task selection.
+than being counted as zero.
+
+Each benchmark, `--substrate`, `--k` and `--seed` combination has its own folder
+under `HARNESS2_RUNS_DIR`, so changing one of those does not need a new
+`HARNESS2_RUNS_DIR`. That folder's `config.json` records the executor, improver
+and judge models, the Google Cloud project and region, the judge and Codex
+endpoints, and the task selection (`--split`, `--only-domains`, `--max-tasks`). A
+run whose values differ stops with an error, and `harness2-judge` refuses a
+different judge model. Use a new `HARNESS2_RUNS_DIR` when changing any of them.
+Both modes share the folder, so running the other `--mode` with the same settings
+needs no new folder.
 
 Refinement, judging, and reporting use `harness2`, `harness2-judge`, and
 `harness2-report`; each supports `--help`.

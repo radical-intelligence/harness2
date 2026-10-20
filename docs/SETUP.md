@@ -27,23 +27,28 @@ Keep the main Harness² environment active when running the commands below.
 
 ## Models and credentials
 
-Copy `.env.example` to `.env` if you have not already done so. Set your Vertex AI
-project and model IDs, then authenticate:
+Copy `.env.example` to `.env` if you have not already done so. Every setting in it
+is commented out: remove the `#` only from the settings you fill in. A setting left
+empty is still passed to the tools harness2 starts, and some treat an empty value
+as an error; for example, an empty `GOOGLE_APPLICATION_CREDENTIALS` makes `gcloud`
+fail. Set your Vertex AI project and model IDs, then authenticate:
 
 ```bash
 gcloud auth application-default login
 ```
 
 Shell environment variables take precedence over `.env`.
-`GOOGLE_CLOUD_PROJECT` identifies your project; `GOOGLE_CLOUD_LOCATION` defaults
-to `global`. Your account must have access to each configured model.
+`GOOGLE_CLOUD_PROJECT` identifies your project; `HARNESS2_VERTEX_PROJECT` is read
+when it is not set. `GOOGLE_CLOUD_LOCATION` defaults to `global`. Your account must
+have access to each configured model.
 
 | Setting | Meaning |
 |---|---|
 | `HARNESS2_SOLVER_MODEL` | Executor model in OpenCode's `provider/model` format |
 | `HARNESS2_IMPROVER_MODEL` | Improver model in the same format; defaults to the executor |
-| `HARNESS2_JUDGE_MODEL` | Bare judge model ID; the adapter supplies the Vertex prefix |
-| `HARNESS2_RUNS_DIR` | Output root; defaults to `runs/` |
+| `HARNESS2_JUDGE_MODEL` | Bare judge model ID; the adapter supplies the Vertex prefix for Gemini IDs, and on LAB also for Claude IDs |
+| `HARNESS2_JUDGE_BASE_URL`, `HARNESS2_JUDGE_API_KEY` | JobBench only: an OpenAI-compatible judge endpoint and its key, used instead of Vertex AI; see [JobBench](BENCHMARKS.md#jobbench) |
+| `HARNESS2_RUNS_DIR` | Output root; defaults to `runs/`. See [results and resume](EXPERIMENTS.md#results-and-resume) |
 
 The provided configuration uses Vertex Gemini executors and judges, and supports
 either Vertex Claude or Gemini as the improver. LAB also supports the upstream

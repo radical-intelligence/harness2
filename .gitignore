@@ -1,0 +1,37 @@
+# Local settings, which may hold API keys
+.env
+
+# Python environments, caches and build output
+.venv/
+venv/
+uv.lock
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Run output
+runs/
+
+# Benchmarks and tools downloaded by harness2-setup. Only the three files that
+# describe the pinned dependencies are tracked.
+dependencies/*
+!dependencies/ASSETS.json
+!dependencies/PINNED.md
+!dependencies/README.md
