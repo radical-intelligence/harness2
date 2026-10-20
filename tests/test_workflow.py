@@ -690,5 +690,19 @@ class PortabilityTests(unittest.TestCase):
         subprocess.run(["/bin/bash", "-n", str(runner)], check=True)
 
 
+class CodexVersionTests(unittest.TestCase):
+    def test_every_runner_names_the_pinned_codex_version(self):
+        version = config.CODEX_VERSION
+        harness = config.ROOT / "third_party/wb_runner/configs/harnesses/codex-harness"
+        versions = sorted(p.name for p in (harness / "versions").glob("*.yaml"))
+        self.assertEqual(versions, [f"{version}.yaml"])
+        self.assertIn(
+            f'CODEX_VERSION: "{version}"', (harness / "versions" / f"{version}.yaml").read_text()
+        )
+        self.assertEqual(config.WB_CX_HARNESS_VER, version)
+        lab = config.ROOT / "third_party/lab_runner/adapt_runs_cx/run_codex_lab.py"
+        self.assertIn(f'"codex-cli {version}"', lab.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

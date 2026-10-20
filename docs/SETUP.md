@@ -138,9 +138,11 @@ CODEX_HOME=~/.harness2/codex dependencies/codex/dist/codex debug models
 harness2-check --bench jb --substrate cx
 ```
 
-`debug models` lists the models this Codex version can use. The pinned Codex
-(0.144.6) refuses newer models such as `gpt-6.1-sol` with "not supported when
-using Codex with a ChatGPT account".
+`debug models` lists the models this Codex version can use. With a ChatGPT login,
+the pinned Codex (0.163.0) lists `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`,
+`gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra` and `gpt-5.6-luna`. Codex refuses a
+model it does not know with "not supported when using Codex with a ChatGPT
+account".
 
 About the login:
 
