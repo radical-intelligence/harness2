@@ -134,18 +134,23 @@ CODEX_HOME=~/.harness2/codex dependencies/codex/dist/codex debug models
 harness2-check --bench jb --substrate cx
 ```
 
-`debug models` lists the models this Codex version can use with the login. Each
-version knows only the models released before it, so the pinned Codex (0.144.6)
-refuses newer ones such as `gpt-6.1-sol` with "not supported when using Codex with
-a ChatGPT account". The login is harness2's own, kept in `HARNESS2_CODEX_HOME` (default `~/.harness2/codex`, which must be outside
-this repository because the login file holds access tokens). It is separate from
-your `~/.codex`: Codex renews a login by rewriting its file, and renewing one copy
-can end the session another copy holds. Every Codex run on JobBench and LAB uses
-this one file; Codex renews it in place about every 8 days. OpenAI recommends an
-API key for automation and one login file per concurrent job, so two runs renewing
-it at the same moment can make one of them fail; running the same command again
-resumes it. WorkBuddy-Bench runs Codex inside Docker and cannot use the login;
-use an endpoint and key for it.
+`debug models` lists the models this Codex version can use. The pinned Codex
+(0.144.6) refuses newer models such as `gpt-6.1-sol` with "not supported when
+using Codex with a ChatGPT account".
+
+About the login:
+
+- It is harness2's own, kept in `HARNESS2_CODEX_HOME` (default
+  `~/.harness2/codex`). That folder must be outside this repository, because the
+  login file holds access tokens.
+- It is separate from your `~/.codex`. Codex renews a login by rewriting its file,
+  and renewing one copy can end the session another copy holds.
+- Every Codex run on JobBench and LAB uses this one file, and Codex renews it in
+  place about every 8 days. OpenAI recommends one login file per concurrent job:
+  if two runs renew it at the same moment, one of them can fail. Running the same
+  command again resumes it.
+- WorkBuddy-Bench runs Codex inside Docker and cannot use the login. Use an
+  endpoint and key for it.
 
 ### Endpoint and key
 
