@@ -1,11 +1,30 @@
 # Local settings, which may hold API keys
 .env
 
-# Python environments and build output
+# Python environments, caches and build output
 .venv/
+venv/
+uv.lock
 __pycache__/
-*.pyc
+*.py[cod]
 *.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
 
 # Run output
 runs/
