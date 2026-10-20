@@ -124,7 +124,7 @@ Set these in `.env`, then install and log harness2's Codex in once:
 
 ```bash
 HARNESS2_CODEX_AUTH=chatgpt
-HARNESS2_CODEX_MODEL=<a model your plan offers>
+HARNESS2_CODEX_MODEL=<a model the pinned Codex can use>
 ```
 
 ```bash
@@ -134,8 +134,11 @@ CODEX_HOME=~/.harness2/codex dependencies/codex/dist/codex debug models
 harness2-check --bench jb --substrate cx
 ```
 
-`debug models` lists the models the plan offers; others are refused with "not
-supported when using Codex with a ChatGPT account". The login is harness2's own,
+`debug models` lists the models this Codex version can use with the login. Each
+version knows only the models released before it, so the pinned Codex (0.144.6)
+refuses newer ones such as `gpt-6.1-sol` with "not supported when using Codex with
+a ChatGPT account"; updating it is
+[#11](https://github.com/radical-intelligence/harness2/issues/11). The login is harness2's own,
 kept in `HARNESS2_CODEX_HOME` (default `~/.harness2/codex`, which must be outside
 this repository because the login file holds access tokens). It is separate from
 your `~/.codex`: Codex renews a login by rewriting its file, and renewing one copy
