@@ -1,0 +1,18 @@
+# Local settings, which may hold API keys
+.env
+
+# Python environments and build output
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Run output
+runs/
+
+# Benchmarks and tools downloaded by harness2-setup. Only the three files that
+# describe the pinned dependencies are tracked.
+dependencies/*
+!dependencies/ASSETS.json
+!dependencies/PINNED.md
+!dependencies/README.md
