@@ -17,7 +17,9 @@
 import importlib.util
 import io
 import json
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -282,10 +284,12 @@ class WorkBuddySetupTests(unittest.TestCase):
                 "protocols": ["openai"],
                 "backend_url_env": "HARNESS2_SOLVER_BASE_URL",
                 "backend_key_env": "HARNESS2_SOLVER_API_KEY",
+                "params": {"max_output_tokens": 64000},
             },
         )
         self.assertEqual(self.route("judge")["name"], "gpt-judge")
         self.assertEqual(self.route("judge")["backend_key_env"], "HARNESS2_JUDGE_API_KEY")
+        self.assertEqual(self.route("judge")["params"], {"max_output_tokens": 16384})
         written = "".join(p.read_text() for p in self.repo.rglob("*.yaml"))
         self.assertNotIn("sk-secret-value", written)
         self.assertNotIn("http://127.0.0.1:1/v1", written)
@@ -455,6 +459,65 @@ class CodexLoginTests(unittest.TestCase):
         self.assertIn('model = "gpt-test"', cfg)
         self.assertNotIn("model_provider", cfg)
         self.assertIn('[projects."/ws"]', cfg)
+
+
+class PortabilityTests(unittest.TestCase):
+    def test_run_limited_keeps_the_exit_code_and_stops_the_group_at_the_limit(self):
+        from harness2.benchmarks.jb_opencode_runner import run_limited
+
+        self.assertEqual(run_limited(["sh", "-c", "exit 3"], limit=10), 3)
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "late"
+            started = time.time()
+            code = run_limited(
+                ["sh", "-c", f"(sleep 3; touch {marker}) & sleep 30"], limit=0.5, grace=2
+            )
+            self.assertEqual(code, 124)
+            self.assertLess(time.time() - started, 5)
+            time.sleep(3)
+            self.assertFalse(marker.exists(), "a child in the group outlived the limit")
+
+    def test_setup_reapplies_a_newer_patch_over_an_older_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "deps" / "demo"
+            repo.mkdir(parents=True)
+            git = ["git", "-C", str(repo)]
+            subprocess.run(git + ["init", "-q"], check=True)
+            (repo / "a.txt").write_text("one\n")
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(
+                git + ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"],
+                check=True,
+            )
+            patches = root / "third_party" / "patches"
+            patches.mkdir(parents=True)
+            diffs = {}
+            for version, text in (("old", "two\n"), ("new", "three\n")):
+                (repo / "a.txt").write_text(text)
+                diffs[version] = subprocess.run(
+                    git + ["diff"], check=True, capture_output=True, text=True
+                ).stdout
+                subprocess.run(git + ["checkout", "-q", "--", "a.txt"], check=True)
+            (root / "old.diff").write_text(diffs["old"])
+            (patches / "demo.diff").write_text(diffs["new"])
+            subprocess.run(git + ["apply", str(root / "old.diff")], check=True)
+            with (
+                patch.multiple(
+                    config, DEPENDENCIES=root / "deps", THIRD_PARTY=root / "third_party"
+                ),
+                patch.dict(install.PATCHES, {"demo": "demo.diff"}),
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                install.patch("demo")
+                install.patch("demo")
+            self.assertEqual((repo / "a.txt").read_text(), "three\n")
+
+    def test_jobbench_codex_runner_parses_under_the_system_bash(self):
+        if not Path("/bin/bash").exists():
+            self.skipTest("no /bin/bash")
+        runner = config.ROOT / "third_party/jb_runner/run_benchmark_codex_cli_adapt.sh"
+        subprocess.run(["/bin/bash", "-n", str(runner)], check=True)
 
 
 if __name__ == "__main__":

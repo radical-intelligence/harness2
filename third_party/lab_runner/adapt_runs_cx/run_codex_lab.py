@@ -70,6 +70,36 @@ trust_level = "trusted"
 """
 
 
+def run_limited(cmd: list[str], *, limit: float, grace: float = 30, **popen_kwargs) -> int:
+    """Run `cmd` in its own process group; return its exit code, or 124 after `limit`
+    seconds, when the group gets SIGTERM and, `grace` seconds later, SIGKILL.
+
+    The contract of GNU `timeout --kill-after`, which macOS does not ship.
+    """
+    proc = subprocess.Popen(cmd, start_new_session=True, **popen_kwargs)
+
+    def stop(sig: int) -> None:
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            pass
+
+    try:
+        return proc.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        stop(signal.SIGTERM)
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            stop(signal.SIGKILL)
+            proc.wait()
+        return 124
+    except BaseException:
+        stop(signal.SIGKILL)
+        proc.wait()
+        raise
+
+
 def write_codex_home(codex_home: Path, model: str, workspace: Path) -> None:
     """Fill a fresh per-run CODEX_HOME for the configured endpoint or the Codex login."""
     codex_home.mkdir(parents=True)
@@ -314,7 +344,6 @@ def main(args) -> int:
             "LAB_BENCH_ROOT": str(REPO),
         })
         cmd = [
-            "timeout", "--kill-after=30s", str(int(max(60, args.timeout))),
             str(CODEX_BIN), "exec", build_prompt(args.task, ws),
             "--model", args.model,
             "-c", f'model_reasoning_effort="{args.reasoning_effort}"',
@@ -330,8 +359,8 @@ def main(args) -> int:
         session_path = run_dir / "codex_session.jsonl"
         with open(session_path, "w", encoding="utf-8") as out, \
              open(run_dir / "codex_stderr.log", "w", encoding="utf-8") as err:
-            rc = subprocess.run(cmd, cwd=str(ws), env=env, stdin=subprocess.DEVNULL,
-                                stdout=out, stderr=err).returncode
+            rc = run_limited(cmd, limit=max(60, args.timeout), cwd=str(ws), env=env,
+                             stdin=subprocess.DEVNULL, stdout=out, stderr=err)
         wall = time.time() - t0
 
         graded = run_dir / "output"

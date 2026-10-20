@@ -111,16 +111,39 @@ def patch(name: str, *, dry_run=False):
         run(["git", "-C", repo, "apply", "--check", source], dry_run=True)
         run(["git", "-C", repo, "apply", source], dry_run=True)
         return
-    if (
-        subprocess.run(
-            ["git", "-C", str(repo), "apply", "--reverse", "--check", str(source)],
-            capture_output=True,
-        ).returncode
-        == 0
-    ):
+
+    def applies(*flags: str) -> bool:
+        cmd = ["git", "-C", str(repo), "apply", *flags, "--check", str(source)]
+        return subprocess.run(cmd, capture_output=True).returncode == 0
+
+    if applies("--reverse"):
         return
+    if not applies():
+        # An older version of this patch is applied. The files it changes are only ever
+        # changed by the patch, so restore them from the pinned checkout and apply anew.
+        modified, created = patch_files(source)
+        print(f"Reapply {source.name}: restore the {len(modified + created)} file(s) it changes")
+        if modified:
+            run(["git", "-C", repo, "checkout", "HEAD", "--", *modified])
+        for rel in created:
+            (repo / rel).unlink(missing_ok=True)
     run(["git", "-C", repo, "apply", "--check", source])
     run(["git", "-C", repo, "apply", source])
+
+
+def patch_files(source: Path) -> tuple[list[str], list[str]]:
+    """(files the patch modifies, files it creates), as repository-relative paths."""
+    modified: list[str] = []
+    created: list[str] = []
+    new_file = False
+    for line in source.read_text(encoding="utf-8").splitlines():
+        if line.startswith("diff --git "):
+            new_file = False
+        elif line.startswith("new file mode") or line == "--- /dev/null":
+            new_file = True
+        elif line.startswith("+++ b/"):
+            (created if new_file else modified).append(line[len("+++ b/") :])
+    return modified, created
 
 
 def overlays(name: str, *, dry_run=False):
@@ -182,6 +205,8 @@ def workbuddy_route(role: str) -> dict | None:
         endpoint_model = vertex_model = model
         on_vertex = model.startswith("gemini")
         url_env, key_env = "HARNESS2_JUDGE_BASE_URL", "HARNESS2_JUDGE_API_KEY"
+    # WorkBuddy's OpenCode agent writes an invalid config without an output limit.
+    max_output_tokens = 64000 if role == "solver" else 16384
     if endpoint and endpoint_model:
         return {
             "model": {
@@ -189,6 +214,7 @@ def workbuddy_route(role: str) -> dict | None:
                 "protocols": ["openai"],
                 "backend_url_env": url_env,
                 "backend_key_env": key_env,
+                "params": {"max_output_tokens": max_output_tokens},
             }
         }
     if on_vertex and config.VERTEX_PROJECT:
@@ -201,7 +227,7 @@ def workbuddy_route(role: str) -> dict | None:
                 "backend_key_ttl": 1800,
                 "thought_signature_passback": True,
                 "params": {
-                    "max_output_tokens": 64000 if role == "solver" else 16384,
+                    "max_output_tokens": max_output_tokens,
                     "extra_body": {"reasoning_effort": "high" if role == "solver" else "low"},
                 },
             }
