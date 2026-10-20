@@ -284,10 +284,12 @@ class WorkBuddySetupTests(unittest.TestCase):
                 "protocols": ["openai"],
                 "backend_url_env": "HARNESS2_SOLVER_BASE_URL",
                 "backend_key_env": "HARNESS2_SOLVER_API_KEY",
+                "params": {"max_output_tokens": 64000},
             },
         )
         self.assertEqual(self.route("judge")["name"], "gpt-judge")
         self.assertEqual(self.route("judge")["backend_key_env"], "HARNESS2_JUDGE_API_KEY")
+        self.assertEqual(self.route("judge")["params"], {"max_output_tokens": 16384})
         written = "".join(p.read_text() for p in self.repo.rglob("*.yaml"))
         self.assertNotIn("sk-secret-value", written)
         self.assertNotIn("http://127.0.0.1:1/v1", written)

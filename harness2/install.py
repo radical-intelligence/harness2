@@ -205,6 +205,8 @@ def workbuddy_route(role: str) -> dict | None:
         endpoint_model = vertex_model = model
         on_vertex = model.startswith("gemini")
         url_env, key_env = "HARNESS2_JUDGE_BASE_URL", "HARNESS2_JUDGE_API_KEY"
+    # WorkBuddy's OpenCode agent writes an invalid config without an output limit.
+    max_output_tokens = 64000 if role == "solver" else 16384
     if endpoint and endpoint_model:
         return {
             "model": {
@@ -212,6 +214,7 @@ def workbuddy_route(role: str) -> dict | None:
                 "protocols": ["openai"],
                 "backend_url_env": url_env,
                 "backend_key_env": key_env,
+                "params": {"max_output_tokens": max_output_tokens},
             }
         }
     if on_vertex and config.VERTEX_PROJECT:
@@ -224,7 +227,7 @@ def workbuddy_route(role: str) -> dict | None:
                 "backend_key_ttl": 1800,
                 "thought_signature_passback": True,
                 "params": {
-                    "max_output_tokens": 64000 if role == "solver" else 16384,
+                    "max_output_tokens": max_output_tokens,
                     "extra_body": {"reasoning_effort": "high" if role == "solver" else "low"},
                 },
             }
