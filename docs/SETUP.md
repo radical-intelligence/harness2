@@ -47,14 +47,20 @@ have access to each configured model.
 | `HARNESS2_SOLVER_MODEL` | Executor model in OpenCode's `provider/model` format |
 | `HARNESS2_IMPROVER_MODEL` | Improver model in the same format; defaults to the executor |
 | `HARNESS2_JUDGE_MODEL` | Bare judge model ID; the adapter supplies the Vertex prefix for Gemini IDs, and on LAB also for Claude IDs |
-| `HARNESS2_JUDGE_BASE_URL`, `HARNESS2_JUDGE_API_KEY` | JobBench only: an OpenAI-compatible judge endpoint and its key, used instead of Vertex AI; see [JobBench](BENCHMARKS.md#jobbench) |
+| `HARNESS2_SOLVER_BASE_URL`, `HARNESS2_SOLVER_API_KEY` | WorkBuddy-Bench only. Endpoint and API key for the executor model: any service that speaks the OpenAI chat API, such as OpenRouter, OpenAI or Ollama. Leave unset to use Vertex AI. See [WorkBuddy-Bench](BENCHMARKS.md#workbuddy-bench) |
+| `HARNESS2_JUDGE_BASE_URL`, `HARNESS2_JUDGE_API_KEY` | JobBench and the WorkBuddy-Bench web subset. Endpoint and API key for the judge model, on the same kind of service. Leave unset to use Vertex AI. See [JobBench](BENCHMARKS.md#jobbench) |
+
+The executor and the judge are usually different models, so each has its own
+endpoint setting. Both can point at the same service.
 | `HARNESS2_RUNS_DIR` | Output root; defaults to `runs/`. See [results and resume](EXPERIMENTS.md#results-and-resume) |
 
 The provided configuration uses Vertex Gemini executors and judges, and supports
 either Vertex Claude or Gemini as the improver. LAB also supports the upstream
 judge's direct providers when their credentials are configured. For WorkBuddy,
-setup generates the Gemini solver and judge routes from these settings; rerun
-setup after changing either model.
+setup writes the solver and judge model configs from these settings, for an
+OpenAI-compatible endpoint or for Vertex Gemini; see
+[WorkBuddy-Bench](BENCHMARKS.md#workbuddy-bench). Rerun setup after changing
+either model or endpoint.
 
 ### Authentication alternatives
 

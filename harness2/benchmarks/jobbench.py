@@ -571,6 +571,29 @@ def _has_events(p: Path) -> bool:
         return False
 
 
+def judge_token() -> tuple[str, str]:
+    """(key for the judge endpoint, why there is none).
+
+    HARNESS2_JUDGE_API_KEY when set. Otherwise a gcloud access token, fetched only for a
+    Google endpoint: it is a credential for the user's Google account and must never be
+    sent to another host.
+    """
+    if config.JB_JUDGE_API_KEY:
+        return config.JB_JUDGE_API_KEY, ""
+    if not config.is_google_endpoint(config.JB_JUDGE_API_BASE):
+        return "", "HARNESS2_JUDGE_API_KEY is required for a judge endpoint outside Google"
+    try:
+        token = subprocess.run(
+            ["gcloud", "auth", "application-default", "print-access-token"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        token = ""
+    return token, "" if token else "no Vertex access token (gcloud auth print-access-token)"
+
+
 def _judge_failed(got: dict) -> bool:
     """True when the JUDGE failed (a transport error, or an error-only report), as
     opposed to the run merely scoring badly."""
@@ -1085,23 +1108,9 @@ class JobBenchAdapter:
             )
             return False
         api_base = config.JB_JUDGE_API_BASE
-        try:
-            token = (
-                config.JB_JUDGE_API_KEY
-                or subprocess.run(
-                    ["gcloud", "auth", "application-default", "print-access-token"],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                ).stdout.strip()
-            )
-        except (subprocess.SubprocessError, OSError):
-            token = ""
+        token, why = judge_token()
         if not token:
-            print(
-                "  [jb] no Vertex access token (gcloud auth print-access-token); judge not run",
-                flush=True,
-            )
+            print(f"  [jb] {why}; judge not run", flush=True)
             return False
         _reporting, own = self._details_candidates(task_id, label)
         own.parent.mkdir(parents=True, exist_ok=True)

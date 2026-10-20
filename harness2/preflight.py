@@ -21,7 +21,7 @@ import shutil
 import subprocess
 
 from . import config
-from .install import PATCHES, missing_runners
+from .install import PATCHES, WB_ROUTE_NEEDS, missing_runners, workbuddy_route
 from .substrate.opencode import OpencodeSubstrate
 
 
@@ -76,9 +76,20 @@ def check(adapter, *, judge=False) -> list[str]:
     if not (config.OPENCODE_DIR / "node_modules").is_dir():
         errors.append(f"OpenCode dependencies missing; run harness2-setup {bench}")
 
+    if bench == "wb":
+        vertex_judge = any(
+            "backend_key_command" in (workbuddy_route(role) or {}).get("model", {})
+            for role in workbuddy_roles(adapter.spec.name == "wb-web")
+        )
+    elif bench == "jb":
+        vertex_judge = not config.JB_JUDGE_API_KEY and config.is_google_endpoint(
+            config.JB_JUDGE_API_BASE
+        )
+    else:
+        vertex_judge = config.JUDGE_MODEL.startswith(("claude", "gemini"))
     if any(
         m.startswith("google-vertex") for m in (config.SOLVER_MODEL_OC, config.IMPROVER_MODEL)
-    ) or (judge and (bench == "wb" or config.JUDGE_MODEL.startswith(("claude", "gemini")))):
+    ) or (judge and vertex_judge):
         probe(
             "Google Application Default Credentials",
             ["gcloud", "auth", "application-default", "print-access-token"],
@@ -105,7 +116,14 @@ def check(adapter, *, judge=False) -> list[str]:
             errors.append(
                 "Set GOOGLE_CLOUD_PROJECT or HARNESS2_JUDGE_BASE_URL for JobBench judging"
             )
-        if (
+        elif not config.JB_JUDGE_API_KEY and not config.is_google_endpoint(
+            config.JB_JUDGE_API_BASE
+        ):
+            errors.append(
+                "Set HARNESS2_JUDGE_API_KEY for a JobBench judge endpoint outside Google; "
+                "a gcloud access token is only sent to Google endpoints"
+            )
+        elif (
             config.JUDGE_MODEL
             and not config.JB_JUDGE_API_KEY
             and not config.JUDGE_MODEL.startswith("gemini")
@@ -131,16 +149,34 @@ def check(adapter, *, judge=False) -> list[str]:
             ],
             cwd=repo,
         )
-        for role, expected in (
-            ("solver", config.SOLVER_MODEL_OC.removeprefix("google-vertex/")),
-            ("judge", config.JUDGE_MODEL),
-        ):
-            path = repo / "configs/models/harness2" / f"{role}.yaml"
-            try:
-                if json.loads(path.read_text())["model"]["name"] != "google/" + expected:
-                    errors.append(f"WorkBuddy {role} configuration is stale; rerun setup")
-            except (OSError, ValueError, KeyError, TypeError):
-                errors.append(f"WorkBuddy {role} configuration missing; rerun setup")
+        errors += workbuddy_route_errors(repo, web=adapter.spec.name == "wb-web")
+    return errors
+
+
+def workbuddy_roles(web: bool) -> tuple[str, ...]:
+    """Every WorkBuddy run loads the solver config; only the web subset's grader the judge's."""
+    return ("solver", "judge") if web else ("solver",)
+
+
+def workbuddy_route_errors(repo, *, web: bool) -> list[str]:
+    """Problems with the model configs setup writes into WorkBuddy, for the current .env."""
+    errors = []
+    for role in workbuddy_roles(web):
+        expected = workbuddy_route(role)
+        if expected is None:
+            errors.append(
+                f"WorkBuddy {role} has no model to use; set {WB_ROUTE_NEEDS[role]}, "
+                "then rerun harness2-setup wb"
+            )
+            continue
+        path = repo / "configs/models/harness2" / f"{role}.yaml"
+        try:
+            found = json.loads(path.read_text())
+        except (OSError, ValueError):
+            errors.append(f"WorkBuddy {role} configuration missing; rerun harness2-setup wb")
+            continue
+        if found != expected:
+            errors.append(f"WorkBuddy {role} configuration is stale; rerun harness2-setup wb")
     return errors
 
 

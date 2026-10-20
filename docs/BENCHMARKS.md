@@ -65,9 +65,10 @@ With a Gemini `HARNESS2_JUDGE_MODEL`, the judge uses the project's Vertex
 OpenAI-compatible endpoint and Application Default Credentials. For a separate
 judge provider, set `HARNESS2_JUDGE_BASE_URL`, `HARNESS2_JUDGE_API_KEY`, and the
 model ID that endpoint accepts; the ID is sent as written. Without
-`HARNESS2_JUDGE_API_KEY`, a `gcloud` access token is sent to the endpoint
-instead. The reported score uses the upstream rubric weights; unscored tasks are
-reported separately. Results are under `runs/jb/`.
+`HARNESS2_JUDGE_API_KEY`, harness2 uses a `gcloud` access token, and only for a
+Google endpoint (`*.googleapis.com`); any other endpoint needs the key, and
+`harness2-check` reports it missing. The reported score uses the upstream rubric
+weights; unscored tasks are reported separately. Results are under `runs/jb/`.
 
 Note: JobBench data, including `RUBRICS.json`, is public on Hugging Face, so an
 executor with web access may retrieve it. Block those hosts during runs as
@@ -100,16 +101,30 @@ pass `--subset` to install only the one you intend to run. Every other command
 takes one subset at a time.
 
 Setup installs the pinned Harbor-based runtime, applies the included adapter,
-mount, and credential/transport patches, copies the harness runners, creates
-solver and judge routes from `.env`, downloads the requested subset with the
-upstream fetch script, and builds the OpenCode harness image. The public Vertex
-setup uses a `google-vertex/gemini...` executor and a bare `gemini...` judge ID;
-no model YAML or account-specific proxy configuration needs to be copied from
-another checkout. Setup refuses to run unless `HARNESS2_SOLVER_MODEL` is a
-`google-vertex/gemini...` ID and `HARNESS2_JUDGE_MODEL` a bare `gemini...` one,
-with `GOOGLE_CLOUD_PROJECT` set; `--dry-run` reports the requirement and still
-prints the rest of the plan. The benchmark's job-local proxy refreshes ADC tokens
-and preserves Gemini tool-call thought signatures.
+mount, and credential/transport patches, copies the harness runners, writes the
+solver and judge model configs from `.env`, downloads the requested subset with
+the upstream fetch script, and builds the OpenCode harness image. No model YAML or
+proxy configuration needs to be copied from another checkout.
+
+Every WorkBuddy run reaches its executor model through the solver config, with
+OpenCode or Codex; only the web subset's grader uses the judge config. Each config
+points at:
+
+- the endpoint in `HARNESS2_SOLVER_BASE_URL` (executor) or
+  `HARNESS2_JUDGE_BASE_URL` (judge), with its `..._API_KEY`, when that is set.
+  Any service that speaks the OpenAI chat API works, such as OpenRouter, OpenAI
+  or Ollama, and the executor model must support tool calls. The executor model
+  name is sent without the part before the first `/`, the judge model name as
+  written. Requests carry no output-token or reasoning settings, so the service's
+  defaults apply. Ollama's default context is small (4,096 tokens on Ollama 0.40)
+  and it silently drops the rest of a longer prompt, so give the model a larger
+  context first, for example `PARAMETER num_ctx 65536` in its Modelfile;
+- otherwise Vertex AI, for a `google-vertex/gemini...` executor or a bare
+  `gemini...` judge with `GOOGLE_CLOUD_PROJECT` set. The job-local proxy refreshes
+  ADC tokens and preserves Gemini tool-call thought signatures.
+
+The configs name the URL and key variables and never hold a key. A config with
+neither is skipped: setup completes and says so, and `harness2-check` reports it.
 
 Setup patches the upstream fetch script to download with `curl` (then `wget`,
 then `hf`) and to require the dataset repository's `SHA256SUMS`: an archive that

@@ -14,13 +14,15 @@
 
 """Focused regressions for the paper's execution, evidence, and adoption contracts."""
 
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from harness2 import config
+from harness2 import config, install, preflight
+from harness2.benchmarks import jobbench
 from harness2.core import context, judge, recursion, schedule, tree
 from harness2.core.library import Library
 from harness2.core.proposer import Proposer, ProposerError, Reply
@@ -223,6 +225,141 @@ class WorkflowTests(unittest.TestCase):
         )
         self.adapter.score.assert_not_called()
         self.assertEqual((rows[0].graded, rows[0].n_passed), (False, None))
+
+
+class WorkBuddySetupTests(unittest.TestCase):
+    VERTEX_SOLVER = {
+        "name": "google/gemini-x",
+        "protocols": ["openai"],
+        "backend_url_env": "HARNESS2_WB_VERTEX_URL",
+        "backend_key_command": "gcloud auth application-default print-access-token",
+        "backend_key_ttl": 1800,
+        "thought_signature_passback": True,
+        "params": {"max_output_tokens": 64000, "extra_body": {"reasoning_effort": "high"}},
+    }
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.repo = Path(temporary.name)
+        self.addCleanup(patch.stopall)
+        patch.object(config, "wb_repo", return_value=self.repo).start()
+
+    def configure(self, solver, judge, project="", solver_url="", judge_url=""):
+        patch.multiple(
+            config,
+            SOLVER_MODEL_OC=solver,
+            JUDGE_MODEL=judge,
+            VERTEX_PROJECT=project,
+            SOLVER_BASE_URL=solver_url,
+            JUDGE_BASE_URL=judge_url,
+        ).start()
+
+    def route(self, role):
+        path = self.repo / "configs/models/harness2" / f"{role}.yaml"
+        return json.loads(path.read_text())["model"] if path.is_file() else None
+
+    def test_no_endpoint_and_no_vertex_gemini_skips_both_routes(self):
+        self.configure("openai/gpt-x", "claude-z")
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            install.workbuddy_models()
+        self.assertEqual((self.route("solver"), self.route("judge")), (None, None))
+        self.assertIn("Skip WorkBuddy solver route", out.getvalue())
+        self.assertIn("Skip WorkBuddy judge route", out.getvalue())
+
+    def test_endpoints_name_variables_and_never_hold_keys(self):
+        self.configure(
+            "openai/gpt-x", "gpt-judge", solver_url="http://127.0.0.1:1/v1", judge_url="http://j/v1"
+        )
+        with patch.dict("os.environ", {"HARNESS2_SOLVER_API_KEY": "sk-secret-value"}):
+            install.workbuddy_models()
+        self.assertEqual(
+            self.route("solver"),
+            {
+                "name": "gpt-x",
+                "protocols": ["openai"],
+                "backend_url_env": "HARNESS2_SOLVER_BASE_URL",
+                "backend_key_env": "HARNESS2_SOLVER_API_KEY",
+            },
+        )
+        self.assertEqual(self.route("judge")["name"], "gpt-judge")
+        self.assertEqual(self.route("judge")["backend_key_env"], "HARNESS2_JUDGE_API_KEY")
+        written = "".join(p.read_text() for p in self.repo.rglob("*.yaml"))
+        self.assertNotIn("sk-secret-value", written)
+        self.assertNotIn("http://127.0.0.1:1/v1", written)
+
+    def test_vertex_gemini_routes_are_unchanged(self):
+        self.configure("google-vertex/gemini-x", "gemini-y", project="demo-project")
+        install.workbuddy_models()
+        self.assertEqual(self.route("solver"), self.VERTEX_SOLVER)
+        self.assertEqual(self.route("judge")["name"], "google/gemini-y")
+
+    def test_endpoint_wins_over_vertex(self):
+        self.configure(
+            "google-vertex/gemini-x", "gemini-y", project="demo-project", solver_url="http://s/v1"
+        )
+        install.workbuddy_models()
+        self.assertEqual(self.route("solver")["backend_url_env"], "HARNESS2_SOLVER_BASE_URL")
+        self.assertEqual(self.route("solver")["name"], "gemini-x")
+        self.assertEqual(self.route("judge")["backend_url_env"], "HARNESS2_WB_VERTEX_URL")
+
+    def test_check_needs_the_judge_route_only_for_web(self):
+        self.configure("openai/gpt-x", "", solver_url="http://s/v1")
+        install.workbuddy_models()
+        self.assertEqual(preflight.workbuddy_route_errors(self.repo, web=False), [])
+        errors = preflight.workbuddy_route_errors(self.repo, web=True)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("judge has no model to use", errors[0])
+
+    def test_check_reports_a_route_written_for_other_settings(self):
+        self.configure("google-vertex/gemini-x", "gemini-y", project="demo-project")
+        install.workbuddy_models()
+        patch.object(config, "SOLVER_BASE_URL", "http://s/v1").start()
+        errors = preflight.workbuddy_route_errors(self.repo, web=False)
+        self.assertEqual(
+            errors, ["WorkBuddy solver configuration is stale; rerun harness2-setup wb"]
+        )
+
+
+class JobBenchJudgeTokenTests(unittest.TestCase):
+    VERTEX = "https://aiplatform.googleapis.com/v1/projects/p/locations/global/endpoints/openapi"
+
+    def setUp(self):
+        self.addCleanup(patch.stopall)
+        self.gcloud = patch.object(
+            jobbench.subprocess, "run", return_value=Mock(stdout="ya29.google-token\n")
+        ).start()
+
+    def configure(self, base, key=""):
+        patch.multiple(config, JB_JUDGE_API_BASE=base, JB_JUDGE_API_KEY=key).start()
+
+    def test_no_gcloud_token_for_a_non_google_endpoint(self):
+        self.configure("https://openrouter.ai/api/v1")
+        token, why = jobbench.judge_token()
+        self.assertEqual(token, "")
+        self.assertIn("HARNESS2_JUDGE_API_KEY is required", why)
+        self.gcloud.assert_not_called()
+
+    def test_gcloud_token_only_for_a_google_endpoint(self):
+        self.configure(self.VERTEX)
+        self.assertEqual(jobbench.judge_token(), ("ya29.google-token", ""))
+        self.gcloud.assert_called_once()
+
+    def test_a_configured_key_is_always_used(self):
+        self.configure("https://openrouter.ai/api/v1", key="sk-or-key")
+        self.assertEqual(jobbench.judge_token(), ("sk-or-key", ""))
+        self.gcloud.assert_not_called()
+
+    def test_lookalike_hosts_are_not_google(self):
+        for url in (
+            "https://evilgoogleapis.com/v1",
+            "https://googleapis.com.example.org/v1",
+            "http://localhost:11434/v1",
+            "",
+        ):
+            self.assertFalse(config.is_google_endpoint(url), url)
+        self.assertTrue(config.is_google_endpoint(self.VERTEX))
+        self.assertTrue(config.is_google_endpoint("https://us-east5-aiplatform.googleapis.com/v1"))
 
 
 if __name__ == "__main__":

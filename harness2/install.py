@@ -148,29 +148,52 @@ def overlays(name: str, *, dry_run=False):
             )
 
 
-def workbuddy_models(*, dry_run=False):
-    """Generate the two Vertex routes from the user's model IDs, never credentials."""
-    solver = config.SOLVER_MODEL_OC.removeprefix("google-vertex/")
-    judge = config.JUDGE_MODEL
-    problem = ""
-    if not config.SOLVER_MODEL_OC.startswith("google-vertex/gemini") or not judge.startswith(
-        "gemini"
-    ):
-        problem = (
-            "WorkBuddy setup requires a google-vertex/gemini... executor "
-            "and a gemini... judge; choose IDs available in your project"
-        )
-    elif not config.VERTEX_PROJECT:
-        problem = "Set GOOGLE_CLOUD_PROJECT for WorkBuddy's Vertex routes"
-    if problem:
-        if not dry_run:
-            raise config.ConfigError(problem)
-        print(f"Configure WorkBuddy solver and judge routes -- {problem}", flush=True)
-        return
-    for role, model in (("solver", solver), ("judge", judge)):
-        payload = {
+WB_ROUTE_NEEDS = {
+    "solver": (
+        "HARNESS2_SOLVER_BASE_URL, or a google-vertex/gemini... HARNESS2_SOLVER_MODEL "
+        "with GOOGLE_CLOUD_PROJECT"
+    ),
+    "judge": (
+        "HARNESS2_JUDGE_BASE_URL, or a gemini... HARNESS2_JUDGE_MODEL with GOOGLE_CLOUD_PROJECT"
+    ),
+}
+WB_ROUTE_IMPACT = {
+    "solver": "WorkBuddy runs cannot start without it",
+    "judge": "the web subset cannot be graded without it",
+}
+
+
+def workbuddy_route(role: str) -> dict | None:
+    """The model config setup writes for a WorkBuddy role ("solver" or "judge"), or None.
+
+    An OpenAI-compatible endpoint from HARNESS2_<ROLE>_BASE_URL wins; otherwise a Vertex
+    Gemini model gets the Vertex route. The config names environment variables that
+    WorkBuddy's proxy reads at run time; it never holds a key.
+    """
+    if role == "solver":
+        endpoint, model = config.SOLVER_BASE_URL, config.SOLVER_MODEL_OC
+        endpoint_model = model.split("/", 1)[-1]
+        vertex_model = model.removeprefix("google-vertex/")
+        on_vertex = model.startswith("google-vertex/gemini")
+        url_env, key_env = "HARNESS2_SOLVER_BASE_URL", "HARNESS2_SOLVER_API_KEY"
+    else:
+        endpoint, model = config.JUDGE_BASE_URL, config.JUDGE_MODEL
+        endpoint_model = vertex_model = model
+        on_vertex = model.startswith("gemini")
+        url_env, key_env = "HARNESS2_JUDGE_BASE_URL", "HARNESS2_JUDGE_API_KEY"
+    if endpoint and endpoint_model:
+        return {
             "model": {
-                "name": "google/" + model,
+                "name": endpoint_model,
+                "protocols": ["openai"],
+                "backend_url_env": url_env,
+                "backend_key_env": key_env,
+            }
+        }
+    if on_vertex and config.VERTEX_PROJECT:
+        return {
+            "model": {
+                "name": "google/" + vertex_model,
                 "protocols": ["openai"],
                 "backend_url_env": "HARNESS2_WB_VERTEX_URL",
                 "backend_key_command": "gcloud auth application-default print-access-token",
@@ -182,11 +205,31 @@ def workbuddy_models(*, dry_run=False):
                 },
             }
         }
+    return None
+
+
+def workbuddy_models(*, dry_run=False):
+    """Write WorkBuddy's solver and judge model configs from .env, never credentials.
+
+    Every WorkBuddy run loads the solver config, and the web subset's grader loads the
+    judge config. A role with no endpoint and no Vertex Gemini model is skipped with a
+    note, and the rest of the installation continues.
+    """
+    for role in ("solver", "judge"):
+        payload = workbuddy_route(role)
+        if payload is None:
+            print(
+                f"Skip WorkBuddy {role} route: it needs {WB_ROUTE_NEEDS[role]}; "
+                f"{WB_ROUTE_IMPACT[role]}",
+                flush=True,
+            )
+            continue
+        model = payload["model"]
+        where = "Vertex AI" if "backend_key_command" in model else model["backend_url_env"]
         path = config.wb_repo() / "configs" / "models" / "harness2" / f"{role}.yaml"
-        print(f"Configure WorkBuddy {role}: {model}", flush=True)
+        print(f"Configure WorkBuddy {role}: {model['name']} via {where}", flush=True)
         if not dry_run:
             path.parent.mkdir(parents=True, exist_ok=True)
-
             path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
