@@ -109,10 +109,12 @@ Every WorkBuddy run reaches its executor model through the solver config, with
 OpenCode or Codex; only the web subset's grader uses the judge config. Each config
 points at:
 
-- the OpenAI-compatible endpoint in `HARNESS2_SOLVER_BASE_URL` or
-  `HARNESS2_JUDGE_BASE_URL` when it is set, with the matching `..._API_KEY`. The
-  executor model ID is sent without its provider prefix, the judge ID as written,
-  and requests carry no output-token or reasoning settings, so the endpoint's
+- the endpoint in `HARNESS2_SOLVER_BASE_URL` (executor) or
+  `HARNESS2_JUDGE_BASE_URL` (judge), with its `..._API_KEY`, when that is set.
+  Any service that speaks the OpenAI chat API works, such as OpenRouter, OpenAI
+  or Ollama, and the executor model must support tool calls. The executor model
+  name is sent without the part before the first `/`, the judge model name as
+  written. Requests carry no output-token or reasoning settings, so the service's
   defaults apply;
 - otherwise Vertex AI, for a `google-vertex/gemini...` executor or a bare
   `gemini...` judge with `GOOGLE_CLOUD_PROJECT` set. The job-local proxy refreshes
