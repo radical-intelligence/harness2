@@ -6,21 +6,25 @@ benchmarks, see the [benchmark guides](BENCHMARKS.md).
 
 ## Requirements
 
-Use Linux and Python 3.12 for benchmark runs; the Python package also supports
-3.13. On Debian/Ubuntu:
+Use Linux or macOS and Python 3.12 for benchmark runs; the Python package also
+supports 3.13. On Debian/Ubuntu:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl unzip ca-certificates pandoc poppler-utils
 ```
 
+On macOS, git, curl and unzip come with the system, and LAB's Pandoc and Poppler
+install with `brew install pandoc poppler`. The runner scripts work with macOS's
+own bash 3.2 and need no GNU tools.
+
 Pandoc and Poppler are needed by LAB. Also install:
 
 - [Node.js](https://nodejs.org/en/download) 20 or newer.
 - [uv](https://docs.astral.sh/uv/getting-started/installation/).
 - [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
-- [Docker Engine](https://docs.docker.com/engine/install/) for WorkBuddy-Bench,
-  with permission to run `docker info`.
+- [Docker Engine](https://docs.docker.com/engine/install/) for WorkBuddy-Bench
+  (Docker Desktop on macOS), with permission to run `docker info`.
 
 Benchmark setup installs its own pinned Bun runtime under `dependencies/`.
 Keep the main Harness² environment active when running the commands below.

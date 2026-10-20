@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -148,11 +149,38 @@ def _stage(task_dir: Path, render_dir: Path, workspace: Path) -> None:
         shutil.copytree(render_dir / "scripts", workspace / "scripts")
 
 
+def run_limited(cmd: list[str], *, limit: float, grace: float = 30, **popen_kwargs) -> int:
+    """Run `cmd` in its own process group; return its exit code, or 124 after `limit`
+    seconds, when the group gets SIGTERM and, `grace` seconds later, SIGKILL.
+
+    The contract of GNU `timeout --kill-after`, which macOS does not ship.
+    """
+    proc = subprocess.Popen(cmd, start_new_session=True, **popen_kwargs)
+
+    def stop(sig: int) -> None:
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            pass
+
+    try:
+        return proc.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        stop(signal.SIGTERM)
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            stop(signal.SIGKILL)
+            proc.wait()
+        return 124
+    except BaseException:
+        stop(signal.SIGKILL)
+        proc.wait()
+        raise
+
+
 def _command(cfg: Settings, workspace: Path, prompt: str, title: str) -> list[str]:
     cmd = [
-        "timeout",
-        "--kill-after=30s",
-        cfg.timeout_per_task,
         "bun",
         "run",
         "--cwd",
@@ -193,13 +221,14 @@ def _attempt(
     handle, raw = tempfile.mkstemp(prefix=f".{task_name}_a{attempt}.stdout.", dir=traj_file.parent)
     os.close(handle)
     with open(raw, "w", encoding="utf-8") as out, log_file.open("a", encoding="utf-8") as err:
-        code = subprocess.run(
+        code = run_limited(
             _command(cfg, workspace, prompt, title),
+            limit=float(cfg.timeout_per_task.rstrip("s")),
             cwd=cfg.opencode_dir,
             env={**os.environ, "OPENCODE_PERMISSION": _permission(workspace)},
             stdout=out,
             stderr=err,
-        ).returncode
+        )
     with open(raw, encoding="utf-8", errors="replace") as src:
         traj_file.write_text(
             "".join(ln for ln in src if ln.startswith(EVENT_PREFIX)), encoding="utf-8"

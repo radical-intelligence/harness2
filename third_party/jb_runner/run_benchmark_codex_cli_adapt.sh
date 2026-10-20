@@ -310,8 +310,9 @@ IMPORTANT:
     # Run Codex CLI via Python to avoid shell-escaping issues
     # Disable set -e temporarily so we can capture the real exit code and clean up
     set +e
-    timeout "${TIMEOUT_PER_TASK}s" python3 - "$prompt_msg" "$actual_model" "$temp_workspace" "$log_file" "$reasoning_effort" "$attempt_traj_file" << 'PYTHON_EXEC'
+    python3 - "$prompt_msg" "$actual_model" "$temp_workspace" "$log_file" "$reasoning_effort" "$attempt_traj_file" "$TIMEOUT_PER_TASK" << 'PYTHON_EXEC'
 import os
+import signal
 import subprocess
 import sys
 
@@ -321,12 +322,16 @@ working_dir = sys.argv[3]
 log_file = sys.argv[4]
 reasoning_effort = sys.argv[5]
 traj_file = sys.argv[6]
+limit = float(sys.argv[7].rstrip('s'))
 
 # Enable editable hooks and preserve the ephemeral session as JSON.
 # Closed stdin prevents waiting for input on an inherited pipe.
 
+# The time limit lives here, not in GNU `timeout` (which macOS does not ship): Codex runs
+# in its own process group, which gets SIGTERM at the limit and SIGKILL 30s later, and
+# the exit code is then 124, as with `timeout`.
 with open(log_file, 'a', encoding='utf-8') as log, open(traj_file, 'w', encoding='utf-8') as traj:
-    result = subprocess.run(
+    proc = subprocess.Popen(
         [
             os.environ['HARNESS2_CODEX_BIN'], 'exec',
             prompt_content,
@@ -344,10 +349,32 @@ with open(log_file, 'a', encoding='utf-8') as log, open(traj_file, 'w', encoding
         stdin=subprocess.DEVNULL,
         stdout=traj,
         stderr=log,
-        text=True
+        text=True,
+        start_new_session=True,
     )
 
-sys.exit(result.returncode)
+    def stop(sig):
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            pass
+
+    try:
+        code = proc.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        stop(signal.SIGTERM)
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            stop(signal.SIGKILL)
+            proc.wait()
+        code = 124
+    except BaseException:
+        stop(signal.SIGKILL)
+        proc.wait()
+        raise
+
+sys.exit(code)
 PYTHON_EXEC
 
     local exit_code=$?
@@ -459,7 +486,7 @@ run_model_tasks() {
 
         run_task "$task_dir" "$model" "$model_name" &
         pids+=($!)
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launched: ${task_name} ($model_name) - PID: ${pids[-1]} (Running: ${#pids[@]}/$MAX_CONCURRENT_PER_MODEL)"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launched: ${task_name} ($model_name) - PID: $! (Running: ${#pids[@]}/$MAX_CONCURRENT_PER_MODEL)"
     done
 
     # Wait for the remaining tasks to finish

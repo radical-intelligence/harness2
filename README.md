@@ -80,7 +80,7 @@ inside the tool loop.
 
 ## Install
 
-Use **Linux, Python 3.12, and [uv](https://docs.astral.sh/uv/getting-started/installation/)**.
+Use **Linux or macOS, Python 3.12, and [uv](https://docs.astral.sh/uv/getting-started/installation/)**.
 From the repository root:
 
 ```bash

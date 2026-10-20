@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -165,16 +166,43 @@ def build_env(workspace: Path, doc_parser: str) -> dict:
     return env
 
 
+def run_limited(cmd: list[str], *, limit: float, grace: float = 30, **popen_kwargs) -> int:
+    """Run `cmd` in its own process group; return its exit code, or 124 after `limit`
+    seconds, when the group gets SIGTERM and, `grace` seconds later, SIGKILL.
+
+    The contract of GNU `timeout --kill-after`, which macOS does not ship.
+    """
+    proc = subprocess.Popen(cmd, start_new_session=True, **popen_kwargs)
+
+    def stop(sig: int) -> None:
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            pass
+
+    try:
+        return proc.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        stop(signal.SIGTERM)
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            stop(signal.SIGKILL)
+            proc.wait()
+        return 124
+    except BaseException:
+        stop(signal.SIGKILL)
+        proc.wait()
+        raise
+
+
 def invoke(args_extra: list[str], *, base: list[str], env: dict, timeout: int,
            session_path: Path, log_path: Path, append: bool) -> int:
     """One `opencode run`, appending its JSON stream to session_path."""
     with open(session_path, "a" if append else "w", encoding="utf-8") as out, \
          open(log_path, "a", encoding="utf-8") as err:
-        proc = subprocess.run(
-            ["timeout", "--kill-after=30s", str(int(max(30, timeout)))] + base + args_extra,
-            stdout=out, stderr=err, env=env, cwd=str(BENCH_ROOT),
-        )
-    return proc.returncode
+        return run_limited(base + args_extra, limit=max(30, timeout),
+                           stdout=out, stderr=err, env=env, cwd=str(BENCH_ROOT))
 
 
 def main(args) -> None:

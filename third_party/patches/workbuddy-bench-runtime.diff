@@ -869,10 +869,10 @@ index afb7019..6a43390 100644
      if dataset_requires_mount:
          validate_harness_mount_available(
 diff --git a/scripts/dataset/fetch-dataset.sh b/scripts/dataset/fetch-dataset.sh
-index 50d51af..342eb31 100755
+index 50d51af..778751a 100755
 --- a/scripts/dataset/fetch-dataset.sh
 +++ b/scripts/dataset/fetch-dataset.sh
-@@ -62,24 +62,24 @@ have() { command -v "$1" >/dev/null 2>&1; }
+@@ -62,25 +62,27 @@ have() { command -v "$1" >/dev/null 2>&1; }
  
  download() {
      local name="$1" dest="$2"
@@ -899,10 +899,86 @@ index 50d51af..342eb31 100755
 -    if have curl; then curl -fsSL "$BASE_URL/SHA256SUMS" -o "$sums" 2>/dev/null || return 0
 -    elif have wget; then wget -q "$BASE_URL/SHA256SUMS" -O "$sums" 2>/dev/null || return 0
 -    else return 0; fi
+-    ( cd "$(dirname "$dest")" && grep "  $name.tar.gz\$" SHA256SUMS | sha256sum -c - )
 +    # Required: pull the repo-side SHA256SUMS and check this archive's line.
 +    if have curl; then curl -fsSL "$BASE_URL/SHA256SUMS" -o "$sums"
 +    elif have wget; then wget -q "$BASE_URL/SHA256SUMS" -O "$sums"
 +    else echo "ERROR: need curl or wget to verify the download." >&2; exit 1; fi
-     ( cd "$(dirname "$dest")" && grep "  $name.tar.gz\$" SHA256SUMS | sha256sum -c - )
++    # sha256sum is missing before macOS 15; shasum checks the same format.
++    local check="sha256sum -c -"; have sha256sum || check="shasum -a 256 -c -"
++    ( cd "$(dirname "$dest")" && grep "  $name.tar.gz\$" SHA256SUMS | $check )
  }
  
+ mkdir -p "$DATASETS_DIR"
+@@ -88,7 +90,9 @@ TMP="$(mktemp -d)"
+ trap 'rm -rf "$TMP" "$DATASETS_DIR"/.stage-*.$$' EXIT
+ 
+ names_out="$(resolve_names)" || exit 1
+-mapfile -t NAMES <<< "$names_out"
++# A read loop rather than mapfile, which bash 3.2 (macOS) does not have.
++NAMES=()
++while IFS= read -r line; do NAMES+=("$line"); done <<< "$names_out"
+ for name in "${NAMES[@]}"; do
+     target="$DATASETS_DIR/$name"
+     if [ -d "$target" ] && [ "$FORCE" -ne 1 ]; then
+diff --git a/scripts/harness/build-harness-mounts.sh b/scripts/harness/build-harness-mounts.sh
+index 252c107..bc1411b 100755
+--- a/scripts/harness/build-harness-mounts.sh
++++ b/scripts/harness/build-harness-mounts.sh
+@@ -31,7 +31,9 @@ while [[ $# -gt 0 ]]; do
+ done
+ 
+ # Enumerate build rows. Emit TSV: slug name image dockerfile context build_args_json
+-mapfile -t ROWS < <(PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" python3 - "$REPO_ROOT" "$CONFIGS_DIR" "$HARNESS_FILTER" <<'PY'
++# bash 3.2 (macOS) has no mapfile and mangles a heredoc inside a process substitution,
++# so each Python program is read with a top-level heredoc and the rows with a read loop.
++IFS= read -r -d '' ROWS_PY <<'PY' || true
+ from __future__ import annotations
+ 
+ import json
+@@ -130,10 +132,17 @@ if rows == 0:
+         print("No harnesses declare a buildable 'mount:' block.", file=sys.stderr)
+     sys.exit(1)
+ PY
+-)
++ROWS=()
++while IFS= read -r row; do ROWS+=("$row"); done < <(PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" python3 -c "$ROWS_PY" "$REPO_ROOT" "$CONFIGS_DIR" "$HARNESS_FILTER")
++IFS= read -r -d '' ARGS_PY <<'PY' || true
++import json, sys
++for key, value in json.loads(sys.argv[1]).items():
++    print(f"{key}={value}")
++PY
+ 
+ built=()
+-for row in "${ROWS[@]}"; do
++# ${a[@]+"${a[@]}"}: bash 3.2 rejects an empty "${a[@]}" under set -u.
++for row in ${ROWS[@]+"${ROWS[@]}"}; do
+     IFS=$'\t' read -r slug name image dockerfile context build_args_json <<< "$row"
+     if [ ! -f "$dockerfile" ]; then
+         echo "WARNING: $slug ($name): $dockerfile not found; skipping." >&2
+@@ -142,20 +151,16 @@ for row in "${ROWS[@]}"; do
+     echo "=== Building harness mount: $slug ($name) -> $image ==="
+     echo "    dockerfile: $dockerfile"
+     echo "    context:    $context"
+-    mapfile -t ARG_PAIRS < <(python3 - "$build_args_json" <<'PY'
+-import json, sys
+-for key, value in json.loads(sys.argv[1]).items():
+-    print(f"{key}={value}")
+-PY
+-)
++    ARG_PAIRS=()
++    while IFS= read -r pair; do ARG_PAIRS+=("$pair"); done < <(python3 -c "$ARGS_PY" "$build_args_json")
+     build_args=()
+-    for pair in "${ARG_PAIRS[@]}"; do
++    for pair in ${ARG_PAIRS[@]+"${ARG_PAIRS[@]}"}; do
+         build_args+=(--build-arg "$pair")
+     done
+     if [ "$DRY_RUN" = "1" ]; then
+-        echo "    dry-run: docker build -f $dockerfile ${build_args[*]} -t $image $context"
++        echo "    dry-run: docker build -f $dockerfile ${build_args[*]:-} -t $image $context"
+     else
+-        docker build -f "$dockerfile" "${build_args[@]}" -t "$image" "$context"
++        docker build -f "$dockerfile" ${build_args[@]+"${build_args[@]}"} -t "$image" "$context"
+     fi
+     built+=("$image")
+ done
