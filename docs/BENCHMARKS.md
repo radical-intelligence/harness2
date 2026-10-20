@@ -100,20 +100,26 @@ pass `--subset` to install only the one you intend to run. Every other command
 takes one subset at a time.
 
 Setup installs the pinned Harbor-based runtime, applies the included adapter,
-mount, and credential/transport patches, copies the harness runners, creates
-solver and judge routes from `.env`, downloads the requested subset with the
-upstream fetch script, and builds the OpenCode harness image. The public Vertex
-setup uses a `google-vertex/gemini...` executor and a bare `gemini...` judge ID;
-no model YAML or account-specific proxy configuration needs to be copied from
-another checkout. Setup writes the solver route only when `HARNESS2_SOLVER_MODEL`
-is a `google-vertex/gemini...` ID, and the judge route only when
-`HARNESS2_JUDGE_MODEL` is a bare `gemini...` one, in both cases with
-`GOOGLE_CLOUD_PROJECT` set. Otherwise it skips that route, says so, and completes
-the rest of the installation. Every WorkBuddy run loads the solver route, with
-OpenCode or Codex, so runs cannot start without it; only the web subset's grader
-loads the judge route. `harness2-check` reports a missing route. The benchmark's
-job-local proxy refreshes ADC tokens and preserves Gemini tool-call thought
-signatures.
+mount, and credential/transport patches, copies the harness runners, writes the
+solver and judge model configs from `.env`, downloads the requested subset with
+the upstream fetch script, and builds the OpenCode harness image. No model YAML or
+proxy configuration needs to be copied from another checkout.
+
+Every WorkBuddy run reaches its executor model through the solver config, with
+OpenCode or Codex; only the web subset's grader uses the judge config. Each config
+points at:
+
+- the OpenAI-compatible endpoint in `HARNESS2_SOLVER_BASE_URL` or
+  `HARNESS2_JUDGE_BASE_URL` when it is set, with the matching `..._API_KEY`. The
+  executor model ID is sent without its provider prefix, the judge ID as written,
+  and requests carry no output-token or reasoning settings, so the endpoint's
+  defaults apply;
+- otherwise Vertex AI, for a `google-vertex/gemini...` executor or a bare
+  `gemini...` judge with `GOOGLE_CLOUD_PROJECT` set. The job-local proxy refreshes
+  ADC tokens and preserves Gemini tool-call thought signatures.
+
+The configs name the URL and key variables and never hold a key. A config with
+neither is skipped: setup completes and says so, and `harness2-check` reports it.
 
 Setup patches the upstream fetch script to download with `curl` (then `wget`,
 then `hf`) and to require the dataset repository's `SHA256SUMS`: an archive that

@@ -227,6 +227,16 @@ class WorkflowTests(unittest.TestCase):
 
 
 class WorkBuddySetupTests(unittest.TestCase):
+    VERTEX_SOLVER = {
+        "name": "google/gemini-x",
+        "protocols": ["openai"],
+        "backend_url_env": "HARNESS2_WB_VERTEX_URL",
+        "backend_key_command": "gcloud auth application-default print-access-token",
+        "backend_key_ttl": 1800,
+        "thought_signature_passback": True,
+        "params": {"max_output_tokens": 64000, "extra_body": {"reasoning_effort": "high"}},
+    }
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -234,48 +244,80 @@ class WorkBuddySetupTests(unittest.TestCase):
         self.addCleanup(patch.stopall)
         patch.object(config, "wb_repo", return_value=self.repo).start()
 
-    def configure(self, solver, judge, project):
+    def configure(self, solver, judge, project="", solver_url="", judge_url=""):
         patch.multiple(
-            config, SOLVER_MODEL_OC=solver, JUDGE_MODEL=judge, VERTEX_PROJECT=project
+            config,
+            SOLVER_MODEL_OC=solver,
+            JUDGE_MODEL=judge,
+            VERTEX_PROJECT=project,
+            SOLVER_BASE_URL=solver_url,
+            JUDGE_BASE_URL=judge_url,
         ).start()
 
-    def written(self):
-        return sorted(p.stem for p in (self.repo / "configs/models/harness2").glob("*.yaml"))
+    def route(self, role):
+        path = self.repo / "configs/models/harness2" / f"{role}.yaml"
+        return json.loads(path.read_text())["model"] if path.is_file() else None
 
-    def test_setup_without_vertex_gemini_skips_both_routes(self):
-        self.configure("openai/gpt-x", "claude-z", "")
+    def test_no_endpoint_and_no_vertex_gemini_skips_both_routes(self):
+        self.configure("openai/gpt-x", "claude-z")
         with patch("sys.stdout", new_callable=io.StringIO) as out:
             install.workbuddy_models()
-        self.assertEqual(self.written(), [])
+        self.assertEqual((self.route("solver"), self.route("judge")), (None, None))
         self.assertIn("Skip WorkBuddy solver route", out.getvalue())
         self.assertIn("Skip WorkBuddy judge route", out.getvalue())
 
-    def test_vertex_gemini_routes_are_unchanged(self):
-        self.configure("google-vertex/gemini-x", "gemini-y", "demo-project")
-        install.workbuddy_models()
-        self.assertEqual(self.written(), ["judge", "solver"])
-        solver = json.loads((self.repo / "configs/models/harness2/solver.yaml").read_text())
+    def test_endpoints_name_variables_and_never_hold_keys(self):
+        self.configure(
+            "openai/gpt-x", "gpt-judge", solver_url="http://127.0.0.1:1/v1", judge_url="http://j/v1"
+        )
+        with patch.dict("os.environ", {"HARNESS2_SOLVER_API_KEY": "sk-secret-value"}):
+            install.workbuddy_models()
         self.assertEqual(
-            solver["model"],
+            self.route("solver"),
             {
-                "name": "google/gemini-x",
+                "name": "gpt-x",
                 "protocols": ["openai"],
-                "backend_url_env": "HARNESS2_WB_VERTEX_URL",
-                "backend_key_command": "gcloud auth application-default print-access-token",
-                "backend_key_ttl": 1800,
-                "thought_signature_passback": True,
-                "params": {"max_output_tokens": 64000, "extra_body": {"reasoning_effort": "high"}},
+                "backend_url_env": "HARNESS2_SOLVER_BASE_URL",
+                "backend_key_env": "HARNESS2_SOLVER_API_KEY",
             },
         )
+        self.assertEqual(self.route("judge")["name"], "gpt-judge")
+        self.assertEqual(self.route("judge")["backend_key_env"], "HARNESS2_JUDGE_API_KEY")
+        written = "".join(p.read_text() for p in self.repo.rglob("*.yaml"))
+        self.assertNotIn("sk-secret-value", written)
+        self.assertNotIn("http://127.0.0.1:1/v1", written)
+
+    def test_vertex_gemini_routes_are_unchanged(self):
+        self.configure("google-vertex/gemini-x", "gemini-y", project="demo-project")
+        install.workbuddy_models()
+        self.assertEqual(self.route("solver"), self.VERTEX_SOLVER)
+        self.assertEqual(self.route("judge")["name"], "google/gemini-y")
+
+    def test_endpoint_wins_over_vertex(self):
+        self.configure(
+            "google-vertex/gemini-x", "gemini-y", project="demo-project", solver_url="http://s/v1"
+        )
+        install.workbuddy_models()
+        self.assertEqual(self.route("solver")["backend_url_env"], "HARNESS2_SOLVER_BASE_URL")
+        self.assertEqual(self.route("solver")["name"], "gemini-x")
+        self.assertEqual(self.route("judge")["backend_url_env"], "HARNESS2_WB_VERTEX_URL")
 
     def test_check_needs_the_judge_route_only_for_web(self):
-        self.configure("google-vertex/gemini-x", "claude-z", "demo-project")
+        self.configure("openai/gpt-x", "", solver_url="http://s/v1")
         install.workbuddy_models()
-        self.assertEqual(self.written(), ["solver"])
         self.assertEqual(preflight.workbuddy_route_errors(self.repo, web=False), [])
         errors = preflight.workbuddy_route_errors(self.repo, web=True)
         self.assertEqual(len(errors), 1)
-        self.assertIn("judge configuration missing", errors[0])
+        self.assertIn("judge has no model to use", errors[0])
+
+    def test_check_reports_a_route_written_for_other_settings(self):
+        self.configure("google-vertex/gemini-x", "gemini-y", project="demo-project")
+        install.workbuddy_models()
+        patch.object(config, "SOLVER_BASE_URL", "http://s/v1").start()
+        errors = preflight.workbuddy_route_errors(self.repo, web=False)
+        self.assertEqual(
+            errors, ["WorkBuddy solver configuration is stale; rerun harness2-setup wb"]
+        )
 
 
 if __name__ == "__main__":

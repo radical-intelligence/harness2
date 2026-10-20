@@ -21,7 +21,7 @@ import shutil
 import subprocess
 
 from . import config
-from .install import PATCHES, WB_ROUTE_NEEDS, missing_runners, workbuddy_routes
+from .install import PATCHES, WB_ROUTE_NEEDS, missing_runners, workbuddy_route
 from .substrate.opencode import OpencodeSubstrate
 
 
@@ -76,9 +76,16 @@ def check(adapter, *, judge=False) -> list[str]:
     if not (config.OPENCODE_DIR / "node_modules").is_dir():
         errors.append(f"OpenCode dependencies missing; run harness2-setup {bench}")
 
+    if bench == "wb":
+        vertex_judge = any(
+            "backend_key_command" in (workbuddy_route(role) or {}).get("model", {})
+            for role in workbuddy_roles(adapter.spec.name == "wb-web")
+        )
+    else:
+        vertex_judge = config.JUDGE_MODEL.startswith(("claude", "gemini"))
     if any(
         m.startswith("google-vertex") for m in (config.SOLVER_MODEL_OC, config.IMPROVER_MODEL)
-    ) or (judge and (bench == "wb" or config.JUDGE_MODEL.startswith(("claude", "gemini")))):
+    ) or (judge and vertex_judge):
         probe(
             "Google Application Default Credentials",
             ["gcloud", "auth", "application-default", "print-access-token"],
@@ -135,26 +142,30 @@ def check(adapter, *, judge=False) -> list[str]:
     return errors
 
 
-def workbuddy_route_errors(repo, *, web: bool) -> list[str]:
-    """Problems with the Vertex routes setup writes into WorkBuddy's model configs.
+def workbuddy_roles(web: bool) -> tuple[str, ...]:
+    """Every WorkBuddy run loads the solver config; only the web subset's grader the judge's."""
+    return ("solver", "judge") if web else ("solver",)
 
-    Every WorkBuddy run loads the solver route; only the web subset's grader loads the
-    judge route.
-    """
+
+def workbuddy_route_errors(repo, *, web: bool) -> list[str]:
+    """Problems with the model configs setup writes into WorkBuddy, for the current .env."""
     errors = []
-    routes = workbuddy_routes()
-    for role in ("solver", "judge") if web else ("solver",):
-        path = repo / "configs/models/harness2" / f"{role}.yaml"
-        try:
-            name = json.loads(path.read_text())["model"]["name"]
-        except (OSError, ValueError, KeyError, TypeError):
+    for role in workbuddy_roles(web):
+        expected = workbuddy_route(role)
+        if expected is None:
             errors.append(
-                f"WorkBuddy {role} configuration missing; run harness2-setup wb with "
-                f"{WB_ROUTE_NEEDS[role]}"
+                f"WorkBuddy {role} has no model to use; set {WB_ROUTE_NEEDS[role]}, "
+                "then rerun harness2-setup wb"
             )
             continue
-        if name != "google/" + routes[role][0]:
-            errors.append(f"WorkBuddy {role} configuration is stale; rerun setup")
+        path = repo / "configs/models/harness2" / f"{role}.yaml"
+        try:
+            found = json.loads(path.read_text())
+        except (OSError, ValueError):
+            errors.append(f"WorkBuddy {role} configuration missing; rerun harness2-setup wb")
+            continue
+        if found != expected:
+            errors.append(f"WorkBuddy {role} configuration is stale; rerun harness2-setup wb")
     return errors
 
 
