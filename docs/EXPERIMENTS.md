@@ -122,8 +122,8 @@ Each benchmark, `--substrate`, `--k` and `--seed` combination has its own folder
 under `HARNESS2_RUNS_DIR`, so changing one of those does not need a new
 `HARNESS2_RUNS_DIR`. That folder's `config.json` records the executor, improver
 and judge models, the Google Cloud project and region, the judge and Codex
-endpoints, the executor endpoint when `HARNESS2_SOLVER_BASE_URL` is set, and the
-task selection (`--split`, `--only-domains`, `--max-tasks`). A
+endpoints, the executor endpoint when `HARNESS2_SOLVER_BASE_URL` is set, whether
+Codex uses the Codex login, and the task selection (`--split`, `--only-domains`, `--max-tasks`). A
 run whose values differ stops with an error, and `harness2-judge` refuses a
 different judge model. Use a new `HARNESS2_RUNS_DIR` when changing any of them.
 Both modes share the folder, so running the other `--mode` with the same settings

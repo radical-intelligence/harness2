@@ -171,7 +171,22 @@ CODEX_DIST = str(DEPENDENCIES / "codex" / "dist")
 CODEX_BASE_URL = env("HARNESS2_CODEX_BASE_URL", "")
 CODEX_CONTAINER_URL = env("HARNESS2_CODEX_CONTAINER_URL", CODEX_BASE_URL)
 VERTEX_PROXY_KEY = env("HARNESS2_CODEX_API_KEY", "")
-CODEX_HOME_DIR = DEPENDENCIES / "codex" / "home"
+# "chatgpt": Codex uses a `codex login` (ChatGPT plan) instead of an endpoint and key.
+CODEX_AUTH = env("HARNESS2_CODEX_AUTH", "")
+CODEX_AUTH_MODES = ("", "chatgpt")
+# Codex's own config folder for harness2 (CODEX_HOME). With the login it holds auth.json,
+# so its default is outside the repository.
+CODEX_HOME_DIR = (
+    Path(env("HARNESS2_CODEX_HOME", Path.home() / ".harness2" / "codex")).expanduser()
+    if CODEX_AUTH == "chatgpt"
+    else Path(env("HARNESS2_CODEX_HOME", DEPENDENCIES / "codex" / "home")).expanduser()
+)
+
+
+def codex_uses_login() -> bool:
+    """Whether the Codex task agent runs on a `codex login` instead of an endpoint and key."""
+    return CODEX_AUTH == "chatgpt"
+
 
 WB_SOLVER_MODEL = "harness2/solver"
 WB_WEB_JUDGE = "harness2/judge"
@@ -189,10 +204,28 @@ TRANSPORT_ATTEMPTS = 2
 PROPOSER_CONCURRENCY = 2
 
 
-def validate_models(*, judge: bool = False) -> None:
-    require("HARNESS2_SOLVER_MODEL", needed_by="executor rollouts")
-    if "/" not in SOLVER_MODEL_OC or "/" not in IMPROVER_MODEL:
-        raise ConfigError("Executor and improver models must use OpenCode's provider/model syntax")
+def validate_models(*, judge: bool = False, substrate: str = "oc") -> None:
+    if CODEX_AUTH not in CODEX_AUTH_MODES:
+        raise ConfigError(f"HARNESS2_CODEX_AUTH must be empty or 'chatgpt', got {CODEX_AUTH!r}")
+    if substrate == "cx":
+        if not SOLVER_MODEL_CX:
+            raise ConfigError(
+                "HARNESS2_CODEX_MODEL is required for executor rollouts with --substrate cx; "
+                "set it in .env or the shell (see .env.example)"
+            )
+        if not IMPROVER_MODEL:
+            raise ConfigError(
+                "HARNESS2_IMPROVER_MODEL is required for the improvement agents with "
+                "--substrate cx; set it in .env or the shell (see .env.example)"
+            )
+        if "/" not in IMPROVER_MODEL:
+            raise ConfigError("The improver model must use OpenCode's provider/model syntax")
+    else:
+        require("HARNESS2_SOLVER_MODEL", needed_by="executor rollouts")
+        if "/" not in SOLVER_MODEL_OC or "/" not in IMPROVER_MODEL:
+            raise ConfigError(
+                "Executor and improver models must use OpenCode's provider/model syntax"
+            )
     if any(m.startswith("google-vertex") for m in (SOLVER_MODEL_OC, IMPROVER_MODEL)):
         if not VERTEX_PROJECT:
             raise ConfigError("Set GOOGLE_CLOUD_PROJECT for Vertex AI")

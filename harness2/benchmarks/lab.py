@@ -718,6 +718,8 @@ class LabAdapter:
             }
             if config.VERTEX_PROXY_KEY:
                 env["VERTEX_PROXY_KEY"] = config.VERTEX_PROXY_KEY
+            if config.codex_uses_login():
+                env["ADAPT_LABCX_AUTH_FILE"] = str(config.CODEX_HOME_DIR / "auth.json")
 
             try:
                 run_detached(
@@ -939,7 +941,13 @@ class LabAdapter:
             _require_runner(config.lab_repo() / "opencode" / "run_opencode.py")
             _require_runtime_scripts()
         else:
-            _require_runner(config.lab_repo() / "external" / "adapt_runs_cx" / "run_codex_lab.py")
+            runner = config.lab_repo() / "external" / "adapt_runs_cx" / "run_codex_lab.py"
+            _require_runner(runner)
+            if config.codex_uses_login() and "ADAPT_LABCX_AUTH_FILE" not in runner.read_text():
+                raise RuntimeError(
+                    f"{runner} predates Codex login support; rerun harness2-setup lab "
+                    "--substrate cx"
+                )
         try:
             r = subprocess.run(
                 [str(config.LAB_PYTHON), "-c", "import evaluation.scoring"],

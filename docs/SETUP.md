@@ -115,10 +115,42 @@ return a nonzero exit status when incomplete.
 
 ## Codex executor
 
-The Codex executor connects to a Responses API endpoint. For Gemini on Vertex
-AI, the included `harness2-bridge` provides this interface through a local
-LiteLLM server, using the same Application Default Credentials and
-`GOOGLE_CLOUD_PROJECT`.
+The Codex executor reaches its model in one of two ways: through your Codex
+login (a ChatGPT plan), or through a Responses API endpoint and key.
+
+### Codex login (ChatGPT plan)
+
+Set these in `.env`, then install and log harness2's Codex in once:
+
+```bash
+HARNESS2_CODEX_AUTH=chatgpt
+HARNESS2_CODEX_MODEL=<a model your plan offers>
+```
+
+```bash
+harness2-setup jb --substrate cx
+CODEX_HOME=~/.harness2/codex dependencies/codex/dist/codex login
+CODEX_HOME=~/.harness2/codex dependencies/codex/dist/codex debug models
+harness2-check --bench jb --substrate cx
+```
+
+`debug models` lists the models the plan offers; others are refused with "not
+supported when using Codex with a ChatGPT account". The login is harness2's own,
+kept in `HARNESS2_CODEX_HOME` (default `~/.harness2/codex`, which must be outside
+this repository because the login file holds access tokens). It is separate from
+your `~/.codex`: Codex renews a login by rewriting its file, and renewing one copy
+can end the session another copy holds. Every Codex run on JobBench and LAB uses
+this one file; Codex renews it in place about every 8 days. OpenAI recommends an
+API key for automation and one login file per concurrent job, so two runs renewing
+it at the same moment can make one of them fail; running the same command again
+resumes it. WorkBuddy-Bench runs Codex inside Docker and cannot use the login yet
+([#8](https://github.com/radical-intelligence/harness2/issues/8)).
+
+### Endpoint and key
+
+For Gemini on Vertex AI, the included `harness2-bridge` provides a Responses API
+endpoint through a local LiteLLM server, using the same Application Default
+Credentials and `GOOGLE_CLOUD_PROJECT`.
 
 Install the optional dependencies and start the bridge in a separate session:
 

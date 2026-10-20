@@ -993,7 +993,8 @@ class JobBenchAdapter:
                 f"upstream JobBench judge missing at {judge_py}; run scripts/setup_benchmark.py jb"
             )
         if self.substrate.name == "cx":
-            config.require("HARNESS2_CODEX_API_KEY", needed_by="JB codex cells")
+            if not config.codex_uses_login():
+                config.require("HARNESS2_CODEX_API_KEY", needed_by="JB codex cells")
             # The rollout reads the endpoint from CODEX_HOME/config.toml, not from the
             # environment the substrate preflight just probed; refuse to report ready
             # for an endpoint the run would never contact.

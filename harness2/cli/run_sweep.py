@@ -225,6 +225,8 @@ def _check_identity(adapter, args, namespace_dir: Path) -> None:
     }
     if config.SOLVER_BASE_URL:
         identity["solver_endpoint"] = config.SOLVER_BASE_URL
+    if args.substrate == "cx" and config.codex_uses_login():
+        identity["codex_auth"] = config.CODEX_AUTH
     namespace_dir.mkdir(parents=True, exist_ok=True)
     path = namespace_dir / "config.json"
     if path.is_file():

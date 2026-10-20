@@ -14,6 +14,7 @@
 
 """Focused regressions for the paper's execution, evidence, and adoption contracts."""
 
+import importlib.util
 import io
 import json
 import tempfile
@@ -28,6 +29,7 @@ from harness2.core.library import Library
 from harness2.core.proposer import Proposer, ProposerError, Reply
 from harness2.core.spec import resolve_channel_model
 from harness2.demo import BASE_SCRIPT, DemoAdapter, DemoProposer
+from harness2.substrate import codex as codex_substrate
 
 
 class WorkflowTests(unittest.TestCase):
@@ -360,6 +362,99 @@ class JobBenchJudgeTokenTests(unittest.TestCase):
             self.assertFalse(config.is_google_endpoint(url), url)
         self.assertTrue(config.is_google_endpoint(self.VERTEX))
         self.assertTrue(config.is_google_endpoint("https://us-east5-aiplatform.googleapis.com/v1"))
+
+
+class CodexLoginTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.addCleanup(patch.stopall)
+        self.home = Path(temporary.name) / "codex-home"
+        dist = Path(temporary.name) / "dist"
+        dist.mkdir()
+        (dist / "codex").write_text("")
+        patch.multiple(
+            config,
+            CODEX_AUTH="chatgpt",
+            CODEX_HOME_DIR=self.home,
+            CODEX_DIST=str(dist),
+            SOLVER_MODEL_CX="gpt-test",
+        ).start()
+
+    def log_in(self, auth_mode="chatgpt", refresh_token="rt-secret"):
+        self.home.mkdir(parents=True, exist_ok=True)
+        tokens = {"refresh_token": refresh_token} if refresh_token else {}
+        (self.home / "auth.json").write_text(json.dumps({"auth_mode": auth_mode, "tokens": tokens}))
+
+    def test_setup_writes_a_login_config_without_an_endpoint(self):
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            install.configure_codex()
+        self.assertEqual(
+            (self.home / "config.toml").read_text(),
+            'model = "gpt-test"\ncli_auth_credentials_store = "file"\n',
+        )
+        self.assertFalse((self.home / "auth.json").exists())
+        self.assertIn(f"CODEX_HOME={self.home}", out.getvalue())
+        self.assertIn("codex login", out.getvalue())
+
+    def test_login_check(self):
+        self.assertIn("not logged in", codex_substrate.login_error())
+        self.log_in(auth_mode="apikey")
+        self.assertIn("not a ChatGPT login", codex_substrate.login_error())
+        self.log_in(refresh_token="")
+        self.assertIn("not a ChatGPT login", codex_substrate.login_error())
+        self.log_in()
+        self.assertIsNone(codex_substrate.login_error())
+
+    def test_login_folder_inside_the_repository_is_refused(self):
+        patch.object(config, "CODEX_HOME_DIR", config.ROOT / "dependencies" / "codex").start()
+        self.assertIn("inside the repository", codex_substrate.login_error())
+
+    def test_an_endpoint_config_is_stale_for_the_login(self):
+        self.log_in()
+        self.home.joinpath("config.toml").write_text(
+            'model = "gpt-test"\nmodel_provider = "harness2"\n'
+            '[model_providers.harness2]\nbase_url = "http://x/v1"\n'
+        )
+        self.assertIn("built-in OpenAI provider", install.codex_config_error())
+        install.configure_codex()
+        self.assertIsNone(install.codex_config_error())
+
+    def test_preflight_uses_the_login_and_refuses_workbuddy(self):
+        self.log_in()
+        codex_substrate.CodexSubstrate().preflight()
+        with self.assertRaisesRegex(config.ConfigError, "issues/8"):
+            codex_substrate.CodexSubstrate().preflight(require_dist=True, require_bridge=True)
+
+    def test_codex_runs_need_the_codex_and_improver_models_only(self):
+        patch.multiple(config, SOLVER_MODEL_OC="", IMPROVER_MODEL="openrouter/a/b").start()
+        config.validate_models(substrate="cx")
+        patch.object(config, "IMPROVER_MODEL", "").start()
+        with self.assertRaisesRegex(config.ConfigError, "HARNESS2_IMPROVER_MODEL"):
+            config.validate_models(substrate="cx")
+        patch.object(config, "CODEX_AUTH", "apikey").start()
+        with self.assertRaisesRegex(config.ConfigError, "HARNESS2_CODEX_AUTH"):
+            config.validate_models(substrate="cx")
+
+    def test_lab_links_each_run_to_the_one_login(self):
+        self.log_in()
+        runner = config.ROOT / "third_party/lab_runner/adapt_runs_cx/run_codex_lab.py"
+        stub = {
+            name: Mock() for name in ("external", "external.tts_lab", "external.tts_lab.config")
+        }
+        env = {"ADAPT_LABCX_AUTH_FILE": str(self.home / "auth.json")}
+        with patch.dict("sys.modules", stub), patch.dict("os.environ", env):
+            spec = importlib.util.spec_from_file_location("run_codex_lab_test", runner)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        run_home = self.home.parent / "run-home"
+        module.write_codex_home(run_home, "gpt-test", Path("/ws"))
+        self.assertTrue((run_home / "auth.json").is_symlink())
+        self.assertEqual((run_home / "auth.json").resolve(), (self.home / "auth.json").resolve())
+        cfg = (run_home / "config.toml").read_text()
+        self.assertIn('model = "gpt-test"', cfg)
+        self.assertNotIn("model_provider", cfg)
+        self.assertIn('[projects."/ws"]', cfg)
 
 
 if __name__ == "__main__":
