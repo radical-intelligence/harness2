@@ -116,7 +116,9 @@ points at:
   or Ollama, and the executor model must support tool calls. The executor model
   name is sent without the part before the first `/`, the judge model name as
   written. Requests carry no output-token or reasoning settings, so the service's
-  defaults apply;
+  defaults apply. Ollama's default context is small (4,096 tokens on Ollama 0.40)
+  and it silently drops the rest of a longer prompt, so give the model a larger
+  context first, for example `PARAMETER num_ctx 65536` in its Modelfile;
 - otherwise Vertex AI, for a `google-vertex/gemini...` executor or a bare
   `gemini...` judge with `GOOGLE_CLOUD_PROJECT` set. The job-local proxy refreshes
   ADC tokens and preserves Gemini tool-call thought signatures.
