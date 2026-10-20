@@ -137,17 +137,15 @@ harness2-check --bench jb --substrate cx
 `debug models` lists the models this Codex version can use with the login. Each
 version knows only the models released before it, so the pinned Codex (0.144.6)
 refuses newer ones such as `gpt-6.1-sol` with "not supported when using Codex with
-a ChatGPT account"; updating it is
-[#11](https://github.com/radical-intelligence/harness2/issues/11). The login is harness2's own,
-kept in `HARNESS2_CODEX_HOME` (default `~/.harness2/codex`, which must be outside
+a ChatGPT account". The login is harness2's own, kept in `HARNESS2_CODEX_HOME` (default `~/.harness2/codex`, which must be outside
 this repository because the login file holds access tokens). It is separate from
 your `~/.codex`: Codex renews a login by rewriting its file, and renewing one copy
 can end the session another copy holds. Every Codex run on JobBench and LAB uses
 this one file; Codex renews it in place about every 8 days. OpenAI recommends an
 API key for automation and one login file per concurrent job, so two runs renewing
 it at the same moment can make one of them fail; running the same command again
-resumes it. WorkBuddy-Bench runs Codex inside Docker and cannot use the login yet
-([#8](https://github.com/radical-intelligence/harness2/issues/8)).
+resumes it. WorkBuddy-Bench runs Codex inside Docker and cannot use the login;
+use an endpoint and key for it.
 
 ### Endpoint and key
 

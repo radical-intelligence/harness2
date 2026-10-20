@@ -423,7 +423,7 @@ class CodexLoginTests(unittest.TestCase):
     def test_preflight_uses_the_login_and_refuses_workbuddy(self):
         self.log_in()
         codex_substrate.CodexSubstrate().preflight()
-        with self.assertRaisesRegex(config.ConfigError, "issues/8"):
+        with self.assertRaisesRegex(config.ConfigError, "WorkBuddy-Bench runs Codex inside Docker"):
             codex_substrate.CodexSubstrate().preflight(require_dist=True, require_bridge=True)
 
     def test_codex_runs_need_the_codex_and_improver_models_only(self):

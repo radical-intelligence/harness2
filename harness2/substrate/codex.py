@@ -211,9 +211,8 @@ class CodexSubstrate:
         if config.codex_uses_login():
             if require_bridge:
                 raise config.ConfigError(
-                    "WorkBuddy-Bench cannot use the Codex login yet "
-                    "(https://github.com/radical-intelligence/harness2/issues/8); "
-                    "unset HARNESS2_CODEX_AUTH and use an endpoint for it"
+                    "WorkBuddy-Bench runs Codex inside Docker and cannot use the Codex "
+                    "login; unset HARNESS2_CODEX_AUTH and use an endpoint for it"
                 )
             if not (Path(config.CODEX_DIST) / "codex").is_file():
                 raise RuntimeError(
