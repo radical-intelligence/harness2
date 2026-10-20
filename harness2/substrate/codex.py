@@ -205,8 +205,23 @@ class CodexSubstrate:
         )
 
     def preflight(self, *, require_dist: bool = False, require_bridge: bool = False) -> None:
-        """Check the CLI and Responses endpoint, including container configuration."""
+        """Check the CLI and Responses endpoint (or the Codex login), including containers."""
         from urllib.parse import urlparse
+
+        if config.codex_uses_login():
+            if require_bridge:
+                raise config.ConfigError(
+                    "WorkBuddy-Bench runs Codex inside Docker and cannot use the Codex "
+                    "login; unset HARNESS2_CODEX_AUTH and use an endpoint for it"
+                )
+            if not (Path(config.CODEX_DIST) / "codex").is_file():
+                raise RuntimeError(
+                    "Codex is not installed; run harness2-setup <bench> --substrate cx"
+                )
+            problem = login_error()
+            if problem:
+                raise config.ConfigError(problem)
+            return
 
         config.require("HARNESS2_CODEX_BASE_URL", needed_by="Codex Responses endpoint")
         config.require("HARNESS2_CODEX_API_KEY", needed_by="Codex endpoint authentication")
@@ -226,6 +241,41 @@ class CodexSubstrate:
             (url.hostname, url.port or (443 if url.scheme == "https" else 80)), timeout=5
         ):
             pass
+
+
+def login_command() -> str:
+    """The command that logs harness2's own Codex in, into its CODEX_HOME."""
+    return f"CODEX_HOME={config.CODEX_HOME_DIR} {Path(config.CODEX_DIST) / 'codex'} login"
+
+
+def login_error() -> str | None:
+    """Why harness2's Codex login cannot be used, or None when it can.
+
+    The login lives in CODEX_HOME/auth.json, separate from the user's own ~/.codex: Codex
+    renews a ChatGPT login by rewriting that file, and a renewal through one copy can end
+    the session the other copy holds. auth.json holds access tokens, so CODEX_HOME must be
+    outside the repository.
+    """
+    home = config.CODEX_HOME_DIR.resolve()
+    root = config.ROOT.resolve()
+    if home == root or root in home.parents:
+        return (
+            f"HARNESS2_CODEX_HOME ({home}) is inside the repository; the Codex login file "
+            f"holds access tokens, so use a folder outside it, such as ~/.harness2/codex"
+        )
+    path = home / "auth.json"
+    try:
+        auth = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return f"Codex is not logged in for harness2; run: {login_command()}"
+    except (OSError, ValueError) as exc:
+        return f"cannot read the Codex login at {path} ({exc}); run: {login_command()}"
+    if auth.get("auth_mode") != "chatgpt" or not (auth.get("tokens") or {}).get("refresh_token"):
+        return (
+            f"{path} is not a ChatGPT login (auth_mode={auth.get('auth_mode')!r}); "
+            f"run: {login_command()}"
+        )
+    return None
 
 
 _TRUNC_FMT = "…(+{n} chars — render truncation)"

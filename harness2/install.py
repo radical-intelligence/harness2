@@ -26,6 +26,7 @@ import tomllib
 from pathlib import Path
 
 from . import config
+from .substrate.codex import login_command, login_error
 
 PATCHES = {
     "opencode": "opencode-compat.diff",
@@ -277,17 +278,32 @@ CODEX_PROVIDER = "harness2"
 
 
 def configure_codex(*, dry_run=False):
-    config.require("HARNESS2_CODEX_BASE_URL", needed_by="Codex setup")
-    body = (
-        f"model = {json.dumps(config.SOLVER_MODEL_CX)}\n"
-        f"model_provider = {json.dumps(CODEX_PROVIDER)}\n"
-        f'[model_providers.{CODEX_PROVIDER}]\nname = "Configured Responses endpoint"\n'
-        f"base_url = {json.dumps(config.CODEX_BASE_URL)}\n"
-        'wire_api = "responses"\nenv_key = "VERTEX_PROXY_KEY"\n'
-    )
+    """Write CODEX_HOME/config.toml: the configured endpoint, or the Codex login.
+
+    With the login, Codex uses its built-in OpenAI provider and keeps the login in
+    CODEX_HOME/auth.json, which this never writes; it only says how to create it.
+    """
+    if config.codex_uses_login():
+        if not config.SOLVER_MODEL_CX:
+            raise config.ConfigError("Set HARNESS2_CODEX_MODEL for Codex setup (see .env.example)")
+        body = (
+            f'model = {json.dumps(config.SOLVER_MODEL_CX)}\ncli_auth_credentials_store = "file"\n'
+        )
+    else:
+        config.require("HARNESS2_CODEX_BASE_URL", needed_by="Codex setup")
+        body = (
+            f"model = {json.dumps(config.SOLVER_MODEL_CX)}\n"
+            f"model_provider = {json.dumps(CODEX_PROVIDER)}\n"
+            f'[model_providers.{CODEX_PROVIDER}]\nname = "Configured Responses endpoint"\n'
+            f"base_url = {json.dumps(config.CODEX_BASE_URL)}\n"
+            'wire_api = "responses"\nenv_key = "VERTEX_PROXY_KEY"\n'
+        )
+    print(f"Configure Codex in {config.CODEX_HOME_DIR}", flush=True)
     if not dry_run:
         config.CODEX_HOME_DIR.mkdir(parents=True, exist_ok=True)
         (config.CODEX_HOME_DIR / "config.toml").write_text(body, encoding="utf-8")
+    if config.codex_uses_login() and login_error():
+        print(f"Log Codex in for harness2 once: {login_command()}", flush=True)
 
 
 def codex_config_error() -> str | None:
@@ -310,6 +326,22 @@ def codex_config_error() -> str | None:
         )
     except tomllib.TOMLDecodeError as exc:
         return f"{path} is not valid TOML ({exc}); {CODEX_CONFIG_REMEDY}"
+    if config.codex_uses_login():
+        stale = []
+        if data.get("model_provider") not in (None, "openai"):
+            stale.append(
+                f"model_provider is {data.get('model_provider')!r}, the Codex login needs "
+                "Codex's built-in OpenAI provider"
+            )
+        if data.get("model") != config.SOLVER_MODEL_CX:
+            stale.append(
+                f"model is {data.get('model')!r}, configuration says {config.SOLVER_MODEL_CX!r}"
+            )
+        if data.get("cli_auth_credentials_store") != "file":
+            stale.append('cli_auth_credentials_store is not "file"')
+        if stale:
+            return f"{path} is stale ({'; '.join(stale)}); {CODEX_CONFIG_REMEDY}"
+        return login_error()
     provider = data.get("model_provider")
     block = (data.get("model_providers") or {}).get(provider) or {}
     stale = [

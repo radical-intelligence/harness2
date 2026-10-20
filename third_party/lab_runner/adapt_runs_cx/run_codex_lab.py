@@ -31,6 +31,8 @@ RESULTS_ROOT = Path(os.environ.get("ADAPT_LABCX_RESULTS", str(RUNNER_DIR / "resu
 CODEX_BIN = Path(os.environ.get("ADAPT_LABCX_CODEX_BIN",
                                 str(Path.home() / ".local" / "bin" / "codex")))
 BASE_URL = os.environ.get("ADAPT_LABCX_BASE_URL", "")
+# Set when the model runs on harness2's Codex login instead of an endpoint and key.
+AUTH_FILE = os.environ.get("ADAPT_LABCX_AUTH_FILE", "")
 VERTEX_PROXY_KEY = os.environ.get("VERTEX_PROXY_KEY", "")
 DEFAULT_MODEL = os.environ.get("ADAPT_LABCX_MODEL", "")
 
@@ -55,6 +57,30 @@ env_key = "VERTEX_PROXY_KEY"
 [projects."{workspace}"]
 trust_level = "trusted"
 """
+
+LOGIN_CONFIG_TOML_TEMPLATE = """\
+# Per-run CODEX_HOME (throwaway; codex writes a [projects] trust entry into this file).
+# The model runs on harness2's Codex login: auth.json here links to that one file, so a
+# login Codex renews during this run is renewed for every later run too.
+model = "{model}"
+cli_auth_credentials_store = "file"
+
+[projects."{workspace}"]
+trust_level = "trusted"
+"""
+
+
+def write_codex_home(codex_home: Path, model: str, workspace: Path) -> None:
+    """Fill a fresh per-run CODEX_HOME for the configured endpoint or the Codex login."""
+    codex_home.mkdir(parents=True)
+    if AUTH_FILE:
+        (codex_home / "config.toml").write_text(
+            LOGIN_CONFIG_TOML_TEMPLATE.format(model=model, workspace=workspace), encoding="utf-8")
+        (codex_home / "auth.json").symlink_to(Path(AUTH_FILE).resolve())
+    else:
+        (codex_home / "config.toml").write_text(
+            CONFIG_TOML_TEMPLATE.format(model=model, base_url=BASE_URL, workspace=workspace),
+            encoding="utf-8")
 
 
 def _require_scratch(p: Path, what: str) -> Path:
@@ -256,17 +282,15 @@ def main(args) -> int:
         harness_dir = Path(args.harness_dir).resolve() if args.harness_dir else None
         installed = install_harness(ws, harness_dir)
 
-        codex_home.mkdir(parents=True)
-        (codex_home / "config.toml").write_text(
-            CONFIG_TOML_TEMPLATE.format(model=args.model, base_url=BASE_URL, workspace=ws),
-            encoding="utf-8")
+        write_codex_home(codex_home, args.model, ws)
 
         config = {
             "runner": "codex",
             "codex_bin": str(CODEX_BIN),
             "codex_version": "codex-cli 0.144.6",
             "model": args.model,
-            "model_chain": f"codex -> {BASE_URL} (Responses API)",
+            "model_chain": ("codex -> Codex login (ChatGPT plan)" if AUTH_FILE
+                            else f"codex -> {BASE_URL} (Responses API)"),
             "reasoning_effort": args.reasoning_effort,
             "task": args.task,
             "run_id": args.run_id,
