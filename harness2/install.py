@@ -148,26 +148,43 @@ def overlays(name: str, *, dry_run=False):
             )
 
 
+WB_ROUTE_NEEDS = {
+    "solver": "a google-vertex/gemini... HARNESS2_SOLVER_MODEL and GOOGLE_CLOUD_PROJECT",
+    "judge": "a gemini... HARNESS2_JUDGE_MODEL and GOOGLE_CLOUD_PROJECT",
+}
+WB_ROUTE_IMPACT = {
+    "solver": "WorkBuddy runs cannot start without it",
+    "judge": "the web subset cannot be graded without it",
+}
+
+
+def workbuddy_routes() -> dict[str, tuple[str, bool]]:
+    """role -> (bare model ID, whether setup can write that role's Vertex route)."""
+    vertex = bool(config.VERTEX_PROJECT)
+    return {
+        "solver": (
+            config.SOLVER_MODEL_OC.removeprefix("google-vertex/"),
+            vertex and config.SOLVER_MODEL_OC.startswith("google-vertex/gemini"),
+        ),
+        "judge": (config.JUDGE_MODEL, vertex and config.JUDGE_MODEL.startswith("gemini")),
+    }
+
+
 def workbuddy_models(*, dry_run=False):
-    """Generate the two Vertex routes from the user's model IDs, never credentials."""
-    solver = config.SOLVER_MODEL_OC.removeprefix("google-vertex/")
-    judge = config.JUDGE_MODEL
-    problem = ""
-    if not config.SOLVER_MODEL_OC.startswith("google-vertex/gemini") or not judge.startswith(
-        "gemini"
-    ):
-        problem = (
-            "WorkBuddy setup requires a google-vertex/gemini... executor "
-            "and a gemini... judge; choose IDs available in your project"
-        )
-    elif not config.VERTEX_PROJECT:
-        problem = "Set GOOGLE_CLOUD_PROJECT for WorkBuddy's Vertex routes"
-    if problem:
-        if not dry_run:
-            raise config.ConfigError(problem)
-        print(f"Configure WorkBuddy solver and judge routes -- {problem}", flush=True)
-        return
-    for role, model in (("solver", solver), ("judge", judge)):
+    """Generate the two Vertex routes from the user's model IDs, never credentials.
+
+    Every WorkBuddy run loads the solver route, and the web subset's grader loads the
+    judge route. Each is written only for a Vertex Gemini model; otherwise setup goes on
+    without it and says what will not work.
+    """
+    for role, (model, ready) in workbuddy_routes().items():
+        if not ready:
+            print(
+                f"Skip WorkBuddy {role} route: it needs {WB_ROUTE_NEEDS[role]}; "
+                f"{WB_ROUTE_IMPACT[role]}",
+                flush=True,
+            )
+            continue
         payload = {
             "model": {
                 "name": "google/" + model,

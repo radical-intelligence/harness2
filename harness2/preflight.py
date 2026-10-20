@@ -21,7 +21,7 @@ import shutil
 import subprocess
 
 from . import config
-from .install import PATCHES, missing_runners
+from .install import PATCHES, WB_ROUTE_NEEDS, missing_runners, workbuddy_routes
 from .substrate.opencode import OpencodeSubstrate
 
 
@@ -131,16 +131,30 @@ def check(adapter, *, judge=False) -> list[str]:
             ],
             cwd=repo,
         )
-        for role, expected in (
-            ("solver", config.SOLVER_MODEL_OC.removeprefix("google-vertex/")),
-            ("judge", config.JUDGE_MODEL),
-        ):
-            path = repo / "configs/models/harness2" / f"{role}.yaml"
-            try:
-                if json.loads(path.read_text())["model"]["name"] != "google/" + expected:
-                    errors.append(f"WorkBuddy {role} configuration is stale; rerun setup")
-            except (OSError, ValueError, KeyError, TypeError):
-                errors.append(f"WorkBuddy {role} configuration missing; rerun setup")
+        errors += workbuddy_route_errors(repo, web=adapter.spec.name == "wb-web")
+    return errors
+
+
+def workbuddy_route_errors(repo, *, web: bool) -> list[str]:
+    """Problems with the Vertex routes setup writes into WorkBuddy's model configs.
+
+    Every WorkBuddy run loads the solver route; only the web subset's grader loads the
+    judge route.
+    """
+    errors = []
+    routes = workbuddy_routes()
+    for role in ("solver", "judge") if web else ("solver",):
+        path = repo / "configs/models/harness2" / f"{role}.yaml"
+        try:
+            name = json.loads(path.read_text())["model"]["name"]
+        except (OSError, ValueError, KeyError, TypeError):
+            errors.append(
+                f"WorkBuddy {role} configuration missing; run harness2-setup wb with "
+                f"{WB_ROUTE_NEEDS[role]}"
+            )
+            continue
+        if name != "google/" + routes[role][0]:
+            errors.append(f"WorkBuddy {role} configuration is stale; rerun setup")
     return errors
 
 

@@ -105,11 +105,15 @@ solver and judge routes from `.env`, downloads the requested subset with the
 upstream fetch script, and builds the OpenCode harness image. The public Vertex
 setup uses a `google-vertex/gemini...` executor and a bare `gemini...` judge ID;
 no model YAML or account-specific proxy configuration needs to be copied from
-another checkout. Setup refuses to run unless `HARNESS2_SOLVER_MODEL` is a
-`google-vertex/gemini...` ID and `HARNESS2_JUDGE_MODEL` a bare `gemini...` one,
-with `GOOGLE_CLOUD_PROJECT` set; `--dry-run` reports the requirement and still
-prints the rest of the plan. The benchmark's job-local proxy refreshes ADC tokens
-and preserves Gemini tool-call thought signatures.
+another checkout. Setup writes the solver route only when `HARNESS2_SOLVER_MODEL`
+is a `google-vertex/gemini...` ID, and the judge route only when
+`HARNESS2_JUDGE_MODEL` is a bare `gemini...` one, in both cases with
+`GOOGLE_CLOUD_PROJECT` set. Otherwise it skips that route, says so, and completes
+the rest of the installation. Every WorkBuddy run loads the solver route, with
+OpenCode or Codex, so runs cannot start without it; only the web subset's grader
+loads the judge route. `harness2-check` reports a missing route. The benchmark's
+job-local proxy refreshes ADC tokens and preserves Gemini tool-call thought
+signatures.
 
 Setup patches the upstream fetch script to download with `curl` (then `wget`,
 then `hf`) and to require the dataset repository's `SHA256SUMS`: an archive that

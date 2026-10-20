@@ -53,8 +53,10 @@ have access to each configured model.
 The provided configuration uses Vertex Gemini executors and judges, and supports
 either Vertex Claude or Gemini as the improver. LAB also supports the upstream
 judge's direct providers when their credentials are configured. For WorkBuddy,
-setup generates the Gemini solver and judge routes from these settings; rerun
-setup after changing either model.
+setup generates the Gemini solver and judge routes from these settings, and skips
+a route whose model is not a Vertex Gemini model; see
+[WorkBuddy-Bench](BENCHMARKS.md#workbuddy-bench). Rerun setup after changing
+either model.
 
 ### Authentication alternatives
 
