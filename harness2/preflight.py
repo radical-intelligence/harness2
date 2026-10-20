@@ -81,6 +81,10 @@ def check(adapter, *, judge=False) -> list[str]:
             "backend_key_command" in (workbuddy_route(role) or {}).get("model", {})
             for role in workbuddy_roles(adapter.spec.name == "wb-web")
         )
+    elif bench == "jb":
+        vertex_judge = not config.JB_JUDGE_API_KEY and config.is_google_endpoint(
+            config.JB_JUDGE_API_BASE
+        )
     else:
         vertex_judge = config.JUDGE_MODEL.startswith(("claude", "gemini"))
     if any(
@@ -112,7 +116,14 @@ def check(adapter, *, judge=False) -> list[str]:
             errors.append(
                 "Set GOOGLE_CLOUD_PROJECT or HARNESS2_JUDGE_BASE_URL for JobBench judging"
             )
-        if (
+        elif not config.JB_JUDGE_API_KEY and not config.is_google_endpoint(
+            config.JB_JUDGE_API_BASE
+        ):
+            errors.append(
+                "Set HARNESS2_JUDGE_API_KEY for a JobBench judge endpoint outside Google; "
+                "a gcloud access token is only sent to Google endpoints"
+            )
+        elif (
             config.JUDGE_MODEL
             and not config.JB_JUDGE_API_KEY
             and not config.JUDGE_MODEL.startswith("gemini")

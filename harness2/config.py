@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 PKG = Path(__file__).resolve().parent
 ROOT = PKG.parent if (PKG.parent / "pyproject.toml").is_file() else Path.cwd()
@@ -153,6 +154,14 @@ VERTEX_OPENAI_URL = (
 )
 JB_JUDGE_API_BASE = env("HARNESS2_JUDGE_BASE_URL", VERTEX_OPENAI_URL if VERTEX_PROJECT else "")
 JB_JUDGE_API_KEY = env("HARNESS2_JUDGE_API_KEY", "")
+
+
+def is_google_endpoint(url: str) -> bool:
+    """Whether `url` is on a Google API host, the only kind a gcloud access token may reach."""
+    host = urlparse(url).hostname or ""
+    return host == "googleapis.com" or host.endswith(".googleapis.com")
+
+
 JB_JUDGE_REASONING_EFFORT = "low"
 JB_REPORTING_JUDGE_DETAILS = ""
 JB_OBS_TRUNC = 50000

@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from harness2 import config, install, preflight
+from harness2.benchmarks import jobbench
 from harness2.core import context, judge, recursion, schedule, tree
 from harness2.core.library import Library
 from harness2.core.proposer import Proposer, ProposerError, Reply
@@ -318,6 +319,47 @@ class WorkBuddySetupTests(unittest.TestCase):
         self.assertEqual(
             errors, ["WorkBuddy solver configuration is stale; rerun harness2-setup wb"]
         )
+
+
+class JobBenchJudgeTokenTests(unittest.TestCase):
+    VERTEX = "https://aiplatform.googleapis.com/v1/projects/p/locations/global/endpoints/openapi"
+
+    def setUp(self):
+        self.addCleanup(patch.stopall)
+        self.gcloud = patch.object(
+            jobbench.subprocess, "run", return_value=Mock(stdout="ya29.google-token\n")
+        ).start()
+
+    def configure(self, base, key=""):
+        patch.multiple(config, JB_JUDGE_API_BASE=base, JB_JUDGE_API_KEY=key).start()
+
+    def test_no_gcloud_token_for_a_non_google_endpoint(self):
+        self.configure("https://openrouter.ai/api/v1")
+        token, why = jobbench.judge_token()
+        self.assertEqual(token, "")
+        self.assertIn("HARNESS2_JUDGE_API_KEY is required", why)
+        self.gcloud.assert_not_called()
+
+    def test_gcloud_token_only_for_a_google_endpoint(self):
+        self.configure(self.VERTEX)
+        self.assertEqual(jobbench.judge_token(), ("ya29.google-token", ""))
+        self.gcloud.assert_called_once()
+
+    def test_a_configured_key_is_always_used(self):
+        self.configure("https://openrouter.ai/api/v1", key="sk-or-key")
+        self.assertEqual(jobbench.judge_token(), ("sk-or-key", ""))
+        self.gcloud.assert_not_called()
+
+    def test_lookalike_hosts_are_not_google(self):
+        for url in (
+            "https://evilgoogleapis.com/v1",
+            "https://googleapis.com.example.org/v1",
+            "http://localhost:11434/v1",
+            "",
+        ):
+            self.assertFalse(config.is_google_endpoint(url), url)
+        self.assertTrue(config.is_google_endpoint(self.VERTEX))
+        self.assertTrue(config.is_google_endpoint("https://us-east5-aiplatform.googleapis.com/v1"))
 
 
 if __name__ == "__main__":
