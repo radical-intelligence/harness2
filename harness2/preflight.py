@@ -21,6 +21,7 @@ import shutil
 import subprocess
 
 from . import config
+from .core.proposer import claude_login_error
 from .install import PATCHES, WB_ROUTE_NEEDS, missing_runners, workbuddy_executor, workbuddy_route
 from .substrate.opencode import OpencodeSubstrate
 
@@ -53,6 +54,10 @@ def check(adapter, *, judge=False) -> list[str]:
             validate()
         except (OSError, RuntimeError, ValueError) as exc:
             errors.append(str(exc))
+    if config.IMPROVER_CHANNEL == "claude_cli":
+        login = claude_login_error()
+        if login:
+            errors.append(login)
 
     bench = adapter.spec.name.split("-", 1)[0]
     name = {"jb": "job-bench-eval", "lab": "harvey-labs", "wb": "workbuddy-bench"}[bench]

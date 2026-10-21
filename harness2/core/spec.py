@@ -65,6 +65,8 @@ def resolve_channel_model(
         )
     if kind is None:
         kind = config.DEFAULT_PROPOSER_CHANNEL
+        if kind not in CHANNELS:
+            raise ValueError(f"HARNESS2_IMPROVER_CHANNEL must be one of {CHANNELS}, got {kind!r}")
     if kind not in CHANNELS:
         raise ValueError(f"unknown channel {kind!r}; expected one of {CHANNELS}")
     if model is None:
@@ -80,8 +82,8 @@ def resolve_channel_model(
         )
     if kind == "claude_cli" and "/" in model:
         raise ValueError(
-            f"claude_cli channel takes a bare Anthropic id "
-            f"(e.g. {config.PROPOSER_MODEL_BY_CHANNEL['claude_cli']!r}), got {model!r}"
+            "claude_cli channel takes a Claude model name such as sonnet, opus or a full "
+            f"claude-... ID in HARNESS2_IMPROVER_MODEL, got {model!r}"
         )
     return ChannelSpec(kind, model, effort=effort, steps=steps, timeout=timeout)
 

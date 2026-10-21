@@ -51,6 +51,48 @@ _DROP_ENV = (
     "CLAUDE_CODE_USE_BEDROCK",
 )
 
+# Settings that send `claude` to Vertex AI or Foundry instead of its own login, and Google
+# Cloud settings. claude_cli sessions run without them and without the _DROP_ENV ones.
+_CLAUDE_PROVIDER_ENV = (
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "ANTHROPIC_VERTEX_PROJECT_ID",
+    "CLOUD_ML_REGION",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+)
+
+
+def claude_login_env() -> dict[str, str]:
+    """The environment for `claude` on the claude_cli channel, so it uses its own login."""
+    drop = _DROP_ENV + _CLAUDE_PROVIDER_ENV
+    return {k: v for k, v in os.environ.items() if k not in drop}
+
+
+def claude_login_error() -> str | None:
+    """Why the claude_cli channel cannot start a session, or None when `claude` is logged in.
+
+    Runs `claude auth status` with the sessions' environment, so an API key or a cloud
+    provider setting in the shell does not count as a login. Calls no model.
+    """
+    cli = shutil.which("claude")
+    if not cli:
+        return "HARNESS2_IMPROVER_CHANNEL=claude_cli needs the claude command (Claude Code) on PATH"
+    try:
+        p = subprocess.run(
+            [cli, "auth", "status", "--json"],
+            env=claude_login_env(),
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"claude auth status: {type(exc).__name__}"
+    if p.returncode or _parse_json(p.stdout).get("loggedIn") is not True:
+        return "The claude command is not logged in; log in with `claude auth login`"
+    return None
+
 
 def _obj(d: dict, key: str) -> dict:
     """`d[key]` when it is a dict, else {}."""
@@ -103,24 +145,16 @@ class Proposer:
             raise ValueError("Set HARNESS2_IMPROVER_MODEL before starting model sessions")
 
     def env(self) -> dict[str, str]:
-        e = {k: v for k, v in os.environ.items() if k not in _DROP_ENV}
         if self.spec.kind == "claude_cli":
-            e.update(
-                {
-                    "CLAUDE_CODE_USE_VERTEX": "1",
-                    "ANTHROPIC_VERTEX_PROJECT_ID": self.project,
-                    "CLOUD_ML_REGION": self.region,
-                    "ANTHROPIC_MODEL": self.spec.model,
-                }
-            )
-        else:
-            e.update(
-                {
-                    "GOOGLE_VERTEX_PROJECT": self.project,
-                    "GOOGLE_VERTEX_LOCATION": self.region,
-                    "VERTEXAI_LOCATION": self.region,
-                }
-            )
+            return claude_login_env()
+        e = {k: v for k, v in os.environ.items() if k not in _DROP_ENV}
+        e.update(
+            {
+                "GOOGLE_VERTEX_PROJECT": self.project,
+                "GOOGLE_VERTEX_LOCATION": self.region,
+                "VERTEXAI_LOCATION": self.region,
+            }
+        )
         return e
 
     def call(
@@ -211,14 +245,28 @@ class Proposer:
         self, cwd: Path, mission: str, system: str, wall: int
     ) -> tuple[str, float, str]:
         cli = shutil.which("claude") or "claude"
+        # acceptEdits keeps the file tools (Read, Write, Edit) inside the session's own folder.
+        # Shell commands are allowed, as in OpenCode sessions, and are not limited to the
+        # folder. The user's own settings, CLAUDE.md, plugins, hooks and MCP servers are left
+        # out, and the session is not saved to their history: the audit folder keeps the
+        # prompt and the reply.
         cmd = [
             cli,
-            "--dangerously-skip-permissions",
             "-p",
             "--output-format",
             "json",
+            "--model",
+            self.spec.model,
             "--effort",
             self.spec.effort,
+            "--permission-mode",
+            "acceptEdits",
+            "--allowedTools",
+            "Bash",
+            "--setting-sources",
+            "project,local",
+            "--strict-mcp-config",
+            "--no-session-persistence",
         ]
         stdin = mission
         if system:
