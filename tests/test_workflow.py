@@ -14,6 +14,7 @@
 
 """Focused regressions for the paper's execution, evidence, and adoption contracts."""
 
+import base64
 import importlib.util
 import io
 import json
@@ -25,7 +26,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from harness2 import config, install, preflight
-from harness2.benchmarks import jobbench
+from harness2.benchmarks import jobbench, workbuddy
 from harness2.core import context, judge, recursion, schedule, tree
 from harness2.core.library import Library
 from harness2.core.proposer import Proposer, ProposerError, Reply
@@ -377,6 +378,7 @@ class CodexLoginTests(unittest.TestCase):
         dist = Path(temporary.name) / "dist"
         dist.mkdir()
         (dist / "codex").write_text("")
+        (dist / "codex-package.json").write_text(json.dumps({"version": config.CODEX_VERSION}))
         patch.multiple(
             config,
             CODEX_AUTH="chatgpt",
@@ -424,11 +426,17 @@ class CodexLoginTests(unittest.TestCase):
         install.configure_codex()
         self.assertIsNone(install.codex_config_error())
 
-    def test_preflight_uses_the_login_and_refuses_workbuddy(self):
+    def test_preflight_uses_the_login_and_needs_linux_codex_for_workbuddy(self):
         self.log_in()
         codex_substrate.CodexSubstrate().preflight()
-        with self.assertRaisesRegex(config.ConfigError, "WorkBuddy-Bench runs Codex inside Docker"):
+        linux = self.home.parent / "linux-dist"
+        patch.object(config, "CODEX_CONTAINER_DIST", str(linux)).start()
+        with self.assertRaisesRegex(RuntimeError, "Linux containers is not installed"):
             codex_substrate.CodexSubstrate().preflight(require_dist=True, require_bridge=True)
+        linux.mkdir()
+        (linux / "codex").write_text("")
+        (linux / "codex-package.json").write_text(json.dumps({"version": config.CODEX_VERSION}))
+        codex_substrate.CodexSubstrate().preflight(require_dist=True, require_bridge=True)
 
     def test_codex_runs_need_the_codex_and_improver_models_only(self):
         patch.multiple(config, SOLVER_MODEL_OC="", IMPROVER_MODEL="openrouter/a/b").start()
@@ -459,6 +467,170 @@ class CodexLoginTests(unittest.TestCase):
         self.assertIn('model = "gpt-test"', cfg)
         self.assertNotIn("model_provider", cfg)
         self.assertIn('[projects."/ws"]', cfg)
+
+
+def fake_jwt(expires_in_s: float) -> str:
+    claims = json.dumps({"exp": int(time.time() + expires_in_s)}).encode()
+    payload = base64.urlsafe_b64encode(claims).decode().rstrip("=")
+    return f"eyJhbGciOiJub25lIn0.{payload}.signature-secret"
+
+
+class WorkBuddyCodexLoginTests(unittest.TestCase):
+    """WorkBuddy-Bench runs Codex in Docker containers on a copy of the Codex login."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.addCleanup(patch.stopall)
+        self.root = Path(temporary.name)
+        self.home = self.root / "codex-home"
+        self.repo = self.root / "workbuddy-bench"
+        patch.multiple(
+            config,
+            CODEX_AUTH="chatgpt",
+            CODEX_HOME_DIR=self.home,
+            CODEX_CONTAINER_DIST=str(self.root / "linux-dist"),
+            SOLVER_MODEL_CX="gpt-test",
+            VERTEX_PROXY_KEY="bridge-key-secret",
+        ).start()
+        patch.object(config, "wb_repo", return_value=self.repo).start()
+
+    def log_in(self, expires_in_s=7 * 86400):
+        self.access_token = fake_jwt(expires_in_s)
+        self.home.mkdir(parents=True, exist_ok=True)
+        auth = {
+            "auth_mode": "chatgpt",
+            "last_refresh": "2026-01-01T00:00:00Z",
+            "tokens": {
+                "id_token": "id-token-secret",
+                "access_token": self.access_token,
+                "refresh_token": "refresh-token-secret",
+                "account_id": "account",
+            },
+        }
+        (self.home / "auth.json").write_text(json.dumps(auth))
+
+    def test_containers_get_a_copy_without_the_refresh_token(self):
+        self.log_in()
+        source = (self.home / "auth.json").read_text()
+        folder = workbuddy.codex_login_copy(3600)
+        self.assertEqual(folder.parent, self.home)
+        self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
+        copy = folder / "auth.json"
+        self.assertEqual(copy.stat().st_mode & 0o777, 0o600)
+        tokens = json.loads(copy.read_text())["tokens"]
+        self.assertEqual(tokens["refresh_token"], "")
+        self.assertEqual(tokens["access_token"], self.access_token)
+        self.assertEqual((self.home / "auth.json").read_text(), source)
+
+    def test_a_batch_that_could_outlast_the_access_token_is_refused(self):
+        self.log_in(expires_in_s=1800)
+        self.assertIsNone(workbuddy.codex_login_problem(600))
+        with self.assertRaisesRegex(config.ConfigError, "Log Codex in again"):
+            workbuddy.codex_login_copy(3600)
+        self.assertEqual([p.name for p in self.home.iterdir()], ["auth.json"])
+
+    def test_the_job_mounts_the_copy_and_holds_no_secret(self):
+        self.log_in()
+        folder = workbuddy.codex_login_copy(3600)
+        job = workbuddy._job_yaml(
+            workbuddy.SUBSETS["code"], "cx", "label", ["task"], None, 1, self.root, folder
+        )
+        self.assertIn("model: harness2/codex\n", job)
+        self.assertIn("  - chatgpt.com\n", job)
+        self.assertIn(f"      source: {self.root / 'linux-dist'}\n      target: /opt/codex\n", job)
+        self.assertIn(f"      source: {folder}\n      target: /opt/codex-login\n", job)
+        self.assertEqual(job.count("      read_only: true\n"), 2)
+        self.assertIn('  CODEX_LOGIN_FILE: "/opt/codex-login/auth.json"\n', job)
+        self.assertNotIn("env_override", job)
+        for secret in (self.access_token, "refresh-token-secret", "bridge-key-secret"):
+            self.assertNotIn(secret, job)
+
+    def test_the_endpoint_job_keeps_the_bridge_settings(self):
+        job = workbuddy._job_yaml(
+            workbuddy.SUBSETS["code"], "cx", "label", ["task"], None, 1, self.root
+        )
+        self.assertIn("model: harness2/solver\n", job)
+        self.assertIn('  VERTEX_PROXY_KEY: "bridge-key-secret"\n', job)
+        self.assertNotIn("codex-login", job)
+        self.assertNotIn("chatgpt.com", job)
+
+    def test_setup_writes_the_codex_model_config_and_check_reads_it(self):
+        self.assertEqual(install.workbuddy_executor("cx"), "codex")
+        self.assertEqual(install.workbuddy_executor("oc"), "solver")
+        patch.multiple(config, SOLVER_MODEL_OC="", SOLVER_BASE_URL="", JUDGE_MODEL="").start()
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            install.workbuddy_models()
+        self.assertIn("Configure WorkBuddy codex: gpt-test", out.getvalue())
+        route = json.loads((self.repo / "configs/models/harness2/codex.yaml").read_text())
+        self.assertEqual(route["model"]["backend_url_env"], "HARNESS2_WB_CODEX_URL")
+        self.assertNotIn("backend_key_env", route["model"])
+        self.assertEqual(
+            preflight.workbuddy_route_errors(self.repo, web=False, executor="codex"), []
+        )
+        self.assertIn(
+            "WorkBuddy solver has no model to use",
+            preflight.workbuddy_route_errors(self.repo, web=False)[0],
+        )
+
+    def test_setup_fetches_a_linux_codex_build_for_the_containers(self):
+        patch.object(config, "CODEX_DIST", str(self.root / "dist")).start()
+        uname = Mock(return_value=Mock(machine="arm64"))
+        with (
+            patch.object(install.os, "uname", uname),
+            patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            install.codex_for_containers(dry_run=True)
+        self.assertIn(f"npm pack @openai/codex@{config.CODEX_VERSION}-linux-arm64", out.getvalue())
+        patch.object(config, "CODEX_CONTAINER_DIST", config.CODEX_DIST).start()
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            install.codex_for_containers(dry_run=True)
+        self.assertEqual(out.getvalue(), "")
+
+    def test_the_container_commands_name_files_only(self):
+        runner = config.ROOT / "third_party/wb_runner/agents/codex_agent.py"
+        names = (
+            "harbor",
+            "harbor.agents",
+            "harbor.agents.installed",
+            "harbor.agents.installed.base",
+            "harbor.environments",
+            "harbor.environments.base",
+            "harbor.models",
+            "harbor.models.agent",
+            "harbor.models.agent.context",
+            "harbor.models.trajectories",
+            "harbor.models.trajectories.agent",
+            "harbor.models.trajectories.final_metrics",
+            "harbor.models.trajectories.metrics",
+            "harbor.models.trajectories.step",
+            "harbor.models.trajectories.tool_call",
+            "harbor.models.trajectories.trajectory",
+            "workbuddy_bench",
+            "workbuddy_bench.agents",
+            "workbuddy_bench.agents._agent_user",
+        )
+        stub = {name: Mock() for name in names}
+        stub["harbor.agents.installed.base"].BaseInstalledAgent = object
+        with patch.dict("sys.modules", stub):
+            spec = importlib.util.spec_from_file_location("codex_agent_test", runner)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        agent = module.CodexAgent.__new__(module.CodexAgent)
+        agent._codex_model = "gpt-test"
+        agent._context_window = None
+        agent._max_output_tokens = None
+        agent._login_file = "/opt/codex-login/auth.json"
+        toml = agent._config_toml("")
+        self.assertIn('cli_auth_credentials_store = "file"', toml)
+        self.assertNotIn("model_provider", toml)
+        install_cmd, remove_cmd = agent._login_commands("dev")
+        self.assertIn('cp /opt/codex-login/auth.json "$dir/auth.json"', install_cmd)
+        self.assertIn('chmod 600 "$dir/auth.json"', install_cmd)
+        self.assertNotIn("base64", install_cmd)
+        self.assertTrue(remove_cmd.startswith("rm -f "))
+        agent._login_file = ""
+        self.assertIn('model_provider = "wbbench_bridge"', agent._config_toml("http://b/v1"))
 
 
 class PortabilityTests(unittest.TestCase):
@@ -518,6 +690,20 @@ class PortabilityTests(unittest.TestCase):
             self.skipTest("no /bin/bash")
         runner = config.ROOT / "third_party/jb_runner/run_benchmark_codex_cli_adapt.sh"
         subprocess.run(["/bin/bash", "-n", str(runner)], check=True)
+
+
+class CodexVersionTests(unittest.TestCase):
+    def test_every_runner_names_the_pinned_codex_version(self):
+        version = config.CODEX_VERSION
+        harness = config.ROOT / "third_party/wb_runner/configs/harnesses/codex-harness"
+        versions = sorted(p.name for p in (harness / "versions").glob("*.yaml"))
+        self.assertEqual(versions, [f"{version}.yaml"])
+        self.assertIn(
+            f'CODEX_VERSION: "{version}"', (harness / "versions" / f"{version}.yaml").read_text()
+        )
+        self.assertEqual(config.WB_CX_HARNESS_VER, version)
+        lab = config.ROOT / "third_party/lab_runner/adapt_runs_cx/run_codex_lab.py"
+        self.assertIn(f'"codex-cli {version}"', lab.read_text())
 
 
 if __name__ == "__main__":

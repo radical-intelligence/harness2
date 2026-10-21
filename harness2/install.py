@@ -17,10 +17,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 import stat
 import subprocess
+import tarfile
 import tempfile
 import tomllib
 from pathlib import Path
@@ -180,20 +182,42 @@ WB_ROUTE_NEEDS = {
     "judge": (
         "HARNESS2_JUDGE_BASE_URL, or a gemini... HARNESS2_JUDGE_MODEL with GOOGLE_CLOUD_PROJECT"
     ),
+    "codex": "HARNESS2_CODEX_MODEL",
 }
 WB_ROUTE_IMPACT = {
-    "solver": "WorkBuddy runs cannot start without it",
+    "solver": "WorkBuddy runs cannot start without it, except Codex runs on the Codex login",
     "judge": "the web subset cannot be graded without it",
+    "codex": "WorkBuddy runs of Codex on the Codex login cannot start without it",
 }
+
+
+def workbuddy_executor(substrate: str) -> str:
+    """The WorkBuddy model config a run loads: "codex" for Codex on the login, else "solver"."""
+    return "codex" if substrate == "cx" and config.codex_uses_login() else "solver"
 
 
 def workbuddy_route(role: str) -> dict | None:
-    """The model config setup writes for a WorkBuddy role ("solver" or "judge"), or None.
+    """The model config setup writes for a WorkBuddy role ("solver", "judge" or "codex").
 
     An OpenAI-compatible endpoint from HARNESS2_<ROLE>_BASE_URL wins; otherwise a Vertex
     Gemini model gets the Vertex route. The config names environment variables that
-    WorkBuddy's proxy reads at run time; it never holds a key.
+    WorkBuddy's proxy reads at run time; it never holds a key. Returns None when the
+    settings give the role no model.
+
+    "codex" is for Codex on the Codex login. Codex then reaches its model with the login
+    and never uses this config, but WorkBuddy loads a model config for every run, so it
+    names the model and the address the login sends requests to.
     """
+    if role == "codex":
+        if not (config.codex_uses_login() and config.SOLVER_MODEL_CX):
+            return None
+        return {
+            "model": {
+                "name": config.SOLVER_MODEL_CX,
+                "protocols": ["openai"],
+                "backend_url_env": "HARNESS2_WB_CODEX_URL",
+            }
+        }
     if role == "solver":
         endpoint, model = config.SOLVER_BASE_URL, config.SOLVER_MODEL_OC
         endpoint_model = model.split("/", 1)[-1]
@@ -236,13 +260,14 @@ def workbuddy_route(role: str) -> dict | None:
 
 
 def workbuddy_models(*, dry_run=False):
-    """Write WorkBuddy's solver and judge model configs from .env, never credentials.
+    """Write WorkBuddy's model configs from .env, never credentials.
 
-    Every WorkBuddy run loads the solver config, and the web subset's grader loads the
-    judge config. A role with no endpoint and no Vertex Gemini model is skipped with a
-    note, and the rest of the installation continues.
+    Every WorkBuddy run loads the solver config, or the codex config for Codex on the
+    Codex login, and the web subset's grader loads the judge config. A role with no
+    endpoint and no Vertex Gemini model is skipped with a note, and the rest of the
+    installation continues.
     """
-    for role in ("solver", "judge"):
+    for role in ("solver", "judge") + (("codex",) if config.codex_uses_login() else ()):
         payload = workbuddy_route(role)
         if payload is None:
             print(
@@ -274,13 +299,48 @@ def codex(*, dry_run=False):
             )
         dest = Path(config.CODEX_DIST)
         platform = candidates[0].parent.parent
-        shutil.copytree(platform, dest, dirs_exist_ok=True)
+        # A fresh copy, so that no file of an earlier Codex version stays behind.
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(platform, dest)
         _share_with_containers(dest)
-        binary = dest / "codex"
-        if binary.is_symlink():
-            binary.unlink()
-        binary.symlink_to("bin/codex")
+        (dest / "codex").symlink_to("bin/codex")
     configure_codex(dry_run=dry_run)
+
+
+LINUX_CODEX_ARCH = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x64", "amd64": "x64"}
+
+
+def codex_for_containers(*, dry_run=False):
+    """Install a Linux build of Codex for WorkBuddy-Bench's containers.
+
+    `codex` installs the build for this machine's system, and WorkBuddy-Bench runs Codex
+    inside Linux containers of this machine's processor type. On Linux that build serves
+    the containers as well, so this does nothing there.
+    """
+    dest = Path(config.CODEX_CONTAINER_DIST)
+    if dest == Path(config.CODEX_DIST):
+        return
+    machine = os.uname().machine
+    arch = LINUX_CODEX_ARCH.get(machine.lower())
+    if arch is None:
+        raise RuntimeError(f"Codex has no Linux build for this processor ({machine})")
+    with tempfile.TemporaryDirectory(prefix="codex-linux-") as tmp:
+        spec = f"@openai/codex@{config.CODEX_VERSION}-linux-{arch}"
+        run(["npm", "pack", spec, "--pack-destination", tmp], cwd=tmp, dry_run=dry_run)
+        if dry_run:
+            return
+        packs = list(Path(tmp).glob("*.tgz"))
+        if len(packs) != 1:
+            raise RuntimeError(f"Expected one package from npm pack {spec}; found {len(packs)}")
+        with tarfile.open(packs[0]) as tar:
+            tar.extractall(tmp, filter="data")
+        builds = list((Path(tmp) / "package" / "vendor").glob("*-linux-musl"))
+        if len(builds) != 1 or not (builds[0] / "bin" / "codex").is_file():
+            raise RuntimeError(f"No Linux Codex binary in {packs[0].name}")
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(builds[0], dest)
+    _share_with_containers(dest)
+    (dest / "codex").symlink_to("bin/codex")
 
 
 def _share_with_containers(root: Path) -> None:

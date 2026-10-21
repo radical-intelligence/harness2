@@ -22,7 +22,7 @@ import subprocess
 
 from . import config
 from .core.proposer import claude_login_error
-from .install import PATCHES, WB_ROUTE_NEEDS, missing_runners, workbuddy_route
+from .install import PATCHES, WB_ROUTE_NEEDS, missing_runners, workbuddy_executor, workbuddy_route
 from .substrate.opencode import OpencodeSubstrate
 
 
@@ -154,19 +154,24 @@ def check(adapter, *, judge=False) -> list[str]:
             ],
             cwd=repo,
         )
-        errors += workbuddy_route_errors(repo, web=adapter.spec.name == "wb-web")
+        errors += workbuddy_route_errors(
+            repo,
+            web=adapter.spec.name == "wb-web",
+            executor=workbuddy_executor(adapter.substrate.name),
+        )
     return errors
 
 
-def workbuddy_roles(web: bool) -> tuple[str, ...]:
-    """Every WorkBuddy run loads the solver config; only the web subset's grader the judge's."""
-    return ("solver", "judge") if web else ("solver",)
+def workbuddy_roles(web: bool, executor: str = "solver") -> tuple[str, ...]:
+    """Every WorkBuddy run loads its executor's config (`workbuddy_executor`); only the web
+    subset's grader loads the judge's."""
+    return (executor, "judge") if web else (executor,)
 
 
-def workbuddy_route_errors(repo, *, web: bool) -> list[str]:
+def workbuddy_route_errors(repo, *, web: bool, executor: str = "solver") -> list[str]:
     """Problems with the model configs setup writes into WorkBuddy, for the current .env."""
     errors = []
-    for role in workbuddy_roles(web):
+    for role in workbuddy_roles(web, executor):
         expected = workbuddy_route(role)
         if expected is None:
             errors.append(

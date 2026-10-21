@@ -74,6 +74,57 @@ Note: JobBench data, including `RUBRICS.json`, is public on Hugging Face, so an
 executor with web access may retrieve it. Block those hosts during runs as
 described under [Web access](EXPERIMENTS.md#web-access).
 
+### Judge with a Claude Code login
+
+`harness2-judge-proxy` lets the JobBench judge use your Claude Code login instead
+of a cloud endpoint, with no Google Cloud settings. It is a local server that
+accepts OpenAI chat-completions requests and answers each one by running
+`claude -p`. Install Claude Code and log in with `claude` first, then start the
+server in a separate terminal and leave it running:
+
+```bash
+harness2-judge-proxy
+```
+
+It prints the settings to add to `.env`. On the first start it also prints a new
+key; while that key is in `.env`, the server keeps using it. Set
+`HARNESS2_JUDGE_MODEL` to a model name that `claude --model` accepts. Use a full
+model ID rather than an alias such as `opus`, so that the run records the exact
+judge model.
+
+```bash
+HARNESS2_JUDGE_BASE_URL=http://127.0.0.1:8642/v1
+HARNESS2_JUDGE_API_KEY=<the key the server printed>
+HARNESS2_JUDGE_MODEL=<full Claude model ID>
+```
+
+Then run `harness2-check` and `harness2-judge` as usual. For each request, the
+server:
+
+- runs `claude -p` in an empty folder, with no tools, no MCP servers, and none of
+  your settings, `CLAUDE.md` files, skills, hooks or plugins;
+- sends the system messages as the system prompt, and the user messages,
+  including base64 images, as one user turn;
+- passes the model to `--model` and the reasoning effort to `--effort` when
+  `claude` accepts that value, and ignores other fields such as temperature and
+  token limits;
+- removes the settings that would make `claude` use an API key or a cloud
+  provider instead of your login, such as `ANTHROPIC_API_KEY`.
+
+The server listens on 127.0.0.1 only and refuses requests without the key. Each
+judge call counts against your Claude plan's usage limits. The JobBench judge
+makes one call per rubric, for example 8 for `biostatisticians/task1`. The
+server runs at most 8 calls at once (`--max-calls`); further calls wait, and the
+judge retries a call that gets no answer within 240 seconds.
+
+Scores from this judge are not comparable to the paper's, because the judge
+model is different.
+
+The WorkBuddy-Bench web subset's grader reads the same two endpoint settings
+(rerun `harness2-setup wb` after changing them), but it has not been tried with
+this server. LAB cannot use it: the LAB judge has no client for OpenAI
+chat-completions, and harness2 sends `claude-*` judge models to Vertex AI.
+
 ## WorkBuddy-Bench
 
 Upstream: [Tencent/workbuddy-bench](https://github.com/Tencent/workbuddy-bench).
@@ -106,9 +157,12 @@ solver and judge model configs from `.env`, downloads the requested subset with
 the upstream fetch script, and builds the OpenCode harness image. No model YAML or
 proxy configuration needs to be copied from another checkout.
 
-Every WorkBuddy run reaches its executor model through the solver config, with
-OpenCode or Codex; only the web subset's grader uses the judge config. Each config
-points at:
+Every WorkBuddy run loads a model config for its executor, and the web subset's
+grader also loads the judge config. OpenCode reaches its model through the solver
+config. Codex reaches its model directly, through an endpoint or the Codex login,
+but its runs still load a model config: the solver config with an endpoint, and
+with the login a `codex` config that setup writes from `HARNESS2_CODEX_MODEL`.
+The solver and judge configs point at:
 
 - the endpoint in `HARNESS2_SOLVER_BASE_URL` (executor) or
   `HARNESS2_JUDGE_BASE_URL` (judge), with its `..._API_KEY`, when that is set.
@@ -138,4 +192,8 @@ uses a fresh benchmark container. The adapter reads the verifier's `score.json`;
 the improver never receives verifier output. Missing verifier results remain
 unscored. Runs live under `runs/wb/<subset>/`.
 
-For Codex, start the bridge with `harness2-bridge --host 0.0.0.0` so that the containers can reach it.
+With `--substrate cx` on a machine that is not Linux, setup also installs the
+Linux build of Codex for the containers, in `dependencies/codex/linux-dist`. For
+Codex on an endpoint, start the bridge with `harness2-bridge --host 0.0.0.0` so
+that the containers can reach it. For Codex on the Codex login, see
+[Codex login in WorkBuddy-Bench](SETUP.md#codex-login-in-workbuddy-bench).

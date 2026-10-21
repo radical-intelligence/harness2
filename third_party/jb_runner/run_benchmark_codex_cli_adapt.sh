@@ -52,7 +52,7 @@ LOG_DIR="${TASKS_BASE_DIR}/.harness2-logs"
 
 mkdir -p "$LOG_DIR"
 
-TEMP_WORKSPACE_BASE="/tmp/codex_benchmark_workspace"
+TEMP_WORKSPACE_BASE="${TEMP_WORKSPACE_BASE:-/tmp/codex_benchmark_workspace}"
 mkdir -p "$TEMP_WORKSPACE_BASE"
 
 # Recursively terminate descendants (including process groups) to clean up on Ctrl+C
@@ -245,12 +245,13 @@ run_task() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting: $task_name ($model_name)"
 
     # Temp workspace: copy the whole task_folder into /tmp
-    local temp_workspace="${TEMP_WORKSPACE_BASE}/${task_name}_${safe_model_name}_${BASHPID}"
+    # mktemp gives each run its own folder (BASHPID is empty in macOS bash 3.2).
+    local temp_workspace
+    temp_workspace="$(mktemp -d "${TEMP_WORKSPACE_BASE}/${task_name}_${safe_model_name}_XXXXXX")"
     local temp_task_folder="${temp_workspace}/task_folder"
     local temp_output_dir="${temp_workspace}/output"
 
-    # Create the temp workspace and copy the task_folder
-    mkdir -p "$temp_workspace"
+    # Copy the task_folder into the temp workspace
     cp -r "$task_dir" "$temp_task_folder"
     mkdir -p "$temp_output_dir"
     mkdir -p "$traj_output_dir"

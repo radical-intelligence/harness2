@@ -317,7 +317,7 @@ def main(args) -> int:
         config = {
             "runner": "codex",
             "codex_bin": str(CODEX_BIN),
-            "codex_version": "codex-cli 0.144.6",
+            "codex_version": "codex-cli 0.163.0",
             "model": args.model,
             "model_chain": ("codex -> Codex login (ChatGPT plan)" if AUTH_FILE
                             else f"codex -> {BASE_URL} (Responses API)"),

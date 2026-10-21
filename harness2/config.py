@@ -79,6 +79,15 @@ def env_int(name: str, default: int) -> int:
         raise ConfigError(f"{name} must be an integer, got {v!r}") from e
 
 
+def env_seconds(name: str, default: str) -> tuple[float, ...]:
+    """A comma-separated list of seconds, such as "60,120,240"."""
+    v = env(name, default)
+    try:
+        return tuple(float(s) for s in v.split(",") if s.strip())
+    except ValueError as e:
+        raise ConfigError(f"{name} must be comma-separated seconds, got {v!r}") from e
+
+
 def require(name: str, *, needed_by: str) -> str:
     """The value of `name`, or ConfigError with the remediation line when it is unset/empty."""
     v = env(name)
@@ -171,8 +180,11 @@ JB_JUDGE_REASONING_EFFORT = "low"
 JB_REPORTING_JUDGE_DETAILS = ""
 JB_OBS_TRUNC = 50000
 
-CODEX_VERSION = "0.144.6"
+CODEX_VERSION = "0.163.0"
 CODEX_DIST = str(DEPENDENCIES / "codex" / "dist")
+# Seconds to wait before each new try of a Codex rollout that stopped on HTTP 429 (rate
+# limited) after Codex's own retries. One new try per value.
+CODEX_429_WAITS = env_seconds("HARNESS2_CODEX_429_WAITS", "60,120,240")
 CODEX_BASE_URL = env("HARNESS2_CODEX_BASE_URL", "")
 CODEX_CONTAINER_URL = env("HARNESS2_CODEX_CONTAINER_URL", CODEX_BASE_URL)
 VERTEX_PROXY_KEY = env("HARNESS2_CODEX_API_KEY", "")
@@ -191,6 +203,13 @@ CODEX_HOME_DIR = (
 def codex_uses_login() -> bool:
     """Whether the Codex task agent runs on a `codex login` instead of an endpoint and key."""
     return CODEX_AUTH == "chatgpt"
+
+
+# The Codex build mounted into WorkBuddy-Bench's Linux containers. On a Linux host it is
+# the host's own build; on another system setup installs a Linux build here.
+CODEX_CONTAINER_DIST = (
+    CODEX_DIST if sys.platform == "linux" else str(DEPENDENCIES / "codex" / "linux-dist")
+)
 
 
 WB_SOLVER_MODEL = "harness2/solver"
