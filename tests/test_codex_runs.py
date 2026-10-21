@@ -226,7 +226,7 @@ class VersionCheckTests(TempDirTest):
         adapters = {
             "jb": jobbench.JobBenchAdapter("cx"),
             "lab": lab.LabAdapter(substrate="cx"),
-            "wb": workbuddy.WbAdapter("code", substrate="cx"),
+            "wb --subset code": workbuddy.WbAdapter("code", substrate="cx"),
         }
         for bench, adapter in adapters.items():
             with self.subTest(bench=bench):

@@ -788,7 +788,7 @@ class WbAdapter:
         self.substrate = (
             OpencodeSubstrate(launcher=self._launch)
             if substrate == "oc"
-            else CodexSubstrate(launcher=self._launch, bench="wb")
+            else CodexSubstrate(launcher=self._launch, bench=f"wb --subset {subset}")
         )
 
     def tasks(self, split: str = "all") -> list[str]:

@@ -117,7 +117,8 @@ class CodexSubstrate:
 
     def __init__(self, launcher: Launcher | None = None, *, bench: str = "<bench>"):
         self._launcher = launcher
-        # The benchmark's setup name, for the setup command in error messages.
+        # The benchmark's setup arguments, such as "jb" or "wb --subset code", for the
+        # setup command in error messages.
         self.bench = bench
 
     def surface(self) -> SurfaceSpec:
