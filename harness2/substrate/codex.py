@@ -209,15 +209,12 @@ class CodexSubstrate:
         from urllib.parse import urlparse
 
         if config.codex_uses_login():
-            if require_bridge:
-                raise config.ConfigError(
-                    "WorkBuddy-Bench runs Codex inside Docker and cannot use the Codex "
-                    "login; unset HARNESS2_CODEX_AUTH and use an endpoint for it"
-                )
             if not (Path(config.CODEX_DIST) / "codex").is_file():
                 raise RuntimeError(
                     "Codex is not installed; run harness2-setup <bench> --substrate cx"
                 )
+            if require_dist:
+                _check_container_dist()
             problem = login_error()
             if problem:
                 raise config.ConfigError(problem)
@@ -233,6 +230,8 @@ class CodexSubstrate:
             raise RuntimeError(
                 "Codex is not installed; run scripts/setup_benchmark.py with --substrate cx"
             )
+        if require_dist:
+            _check_container_dist()
         if require_bridge and not config.CODEX_CONTAINER_URL:
             raise RuntimeError(
                 "Set HARNESS2_CODEX_CONTAINER_URL to a container-accessible Responses endpoint"
@@ -276,6 +275,15 @@ def login_error() -> str | None:
             f"run: {login_command()}"
         )
     return None
+
+
+def _check_container_dist() -> None:
+    """WorkBuddy-Bench mounts this Linux build of Codex into its containers."""
+    if not (Path(config.CODEX_CONTAINER_DIST) / "codex").is_file():
+        raise RuntimeError(
+            "Codex for WorkBuddy-Bench's Linux containers is not installed; "
+            "run harness2-setup wb --substrate cx"
+        )
 
 
 _TRUNC_FMT = "…(+{n} chars — render truncation)"

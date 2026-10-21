@@ -157,9 +157,12 @@ solver and judge model configs from `.env`, downloads the requested subset with
 the upstream fetch script, and builds the OpenCode harness image. No model YAML or
 proxy configuration needs to be copied from another checkout.
 
-Every WorkBuddy run reaches its executor model through the solver config, with
-OpenCode or Codex; only the web subset's grader uses the judge config. Each config
-points at:
+Every WorkBuddy run loads a model config for its executor, and the web subset's
+grader also loads the judge config. OpenCode reaches its model through the solver
+config. Codex reaches its model directly, through an endpoint or the Codex login,
+but its runs still load a model config: the solver config with an endpoint, and
+with the login a `codex` config that setup writes from `HARNESS2_CODEX_MODEL`.
+The solver and judge configs point at:
 
 - the endpoint in `HARNESS2_SOLVER_BASE_URL` (executor) or
   `HARNESS2_JUDGE_BASE_URL` (judge), with its `..._API_KEY`, when that is set.
@@ -189,4 +192,8 @@ uses a fresh benchmark container. The adapter reads the verifier's `score.json`;
 the improver never receives verifier output. Missing verifier results remain
 unscored. Runs live under `runs/wb/<subset>/`.
 
-For Codex, start the bridge with `harness2-bridge --host 0.0.0.0` so that the containers can reach it.
+With `--substrate cx` on a machine that is not Linux, setup also installs the
+Linux build of Codex for the containers, in `dependencies/codex/linux-dist`. For
+Codex on an endpoint, start the bridge with `harness2-bridge --host 0.0.0.0` so
+that the containers can reach it. For Codex on the Codex login, see
+[Codex login in WorkBuddy-Bench](SETUP.md#codex-login-in-workbuddy-bench).

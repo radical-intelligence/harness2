@@ -21,6 +21,7 @@ deliverable comes through wb_render.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -42,7 +43,7 @@ from ..core.selection import order_graded_first
 from ..core.spec import BenchPrompts, BenchSpec, resolve_channel_model
 from ..substrate import opencode as OC
 from ..substrate.base import Install, RunRequest
-from ..substrate.codex import CODEX_SURFACE, CodexSubstrate
+from ..substrate.codex import CODEX_SURFACE, CodexSubstrate, login_command, login_error
 from ..substrate.opencode import OPENCODE_SURFACE, OpencodeSubstrate
 from . import wb_render as RENDER
 from .tasks import discover, select
@@ -490,6 +491,74 @@ def sweep_orphans(max_age_s: int = 86400) -> int:
     return n
 
 
+# Codex on the Codex login (HARNESS2_CODEX_AUTH=chatgpt). Each batch mounts a copy of the
+# login, read-only, at CODEX_LOGIN_MOUNT in its containers, and Codex sends its requests
+# to CODEX_LOGIN_URL. The job's model config, which WorkBuddy loads for every run, names
+# that address; Codex itself never reads it.
+CODEX_LOGIN_MOUNT = "/opt/codex-login"
+CODEX_LOGIN_HOST = "chatgpt.com"
+CODEX_LOGIN_URL = f"https://{CODEX_LOGIN_HOST}/backend-api/codex"
+WB_CODEX_LOGIN_MODEL = "harness2/codex"
+# Codex renews an access token that expires within 5 minutes, and stopping a batch at its
+# time limit takes up to 3 more, so the token must outlast the time limit by this much.
+LOGIN_MARGIN_S = 600
+
+
+def _jwt_expiry(token) -> float | None:
+    """The expiry time (`exp`) of a JWT, or None when `token` is not one."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        return float(claims["exp"])
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+        return None
+
+
+def codex_login_problem(valid_for_s: int) -> str | None:
+    """Why harness2's Codex login cannot serve a WorkBuddy-Bench batch that lasts up to
+    `valid_for_s` seconds, or None when it can.
+
+    Containers get a copy without the refresh token (see `codex_login_copy`), so they
+    cannot renew the login, and its access token must stay valid for the whole batch.
+    """
+    problem = login_error()
+    if problem:
+        return problem
+    auth = json.loads((config.CODEX_HOME_DIR / "auth.json").read_text(encoding="utf-8"))
+    expires = _jwt_expiry((auth.get("tokens") or {}).get("access_token"))
+    if expires is not None and expires < time.time() + valid_for_s:
+        return (
+            "The Codex login's access token expires at "
+            f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(expires))}, before a "
+            "WorkBuddy-Bench batch could end, and Codex cannot renew it inside a container. "
+            f"Log Codex in again: {login_command()}"
+        )
+    return None
+
+
+def codex_login_copy(valid_for_s: int) -> Path:
+    """Write the copy of harness2's Codex login that one batch's containers use, and
+    return its folder. The caller deletes the folder after the batch.
+
+    The copy leaves out the refresh token, so Codex in a container cannot renew the
+    login: a renewal replaces the refresh token, and doing it in a copy that is thrown
+    away would end the session the shared login holds. Codex renews only an access token
+    about to expire, so this refuses a batch that could outlast the access token. The
+    folder is inside CODEX_HOME, which is outside the repository, and only this user can
+    read it.
+    """
+    problem = codex_login_problem(valid_for_s)
+    if problem:
+        raise config.ConfigError(problem)
+    auth = json.loads((config.CODEX_HOME_DIR / "auth.json").read_text(encoding="utf-8"))
+    tokens = {**auth["tokens"], "refresh_token": ""}
+    folder = Path(tempfile.mkdtemp(prefix="wb-login-", dir=config.CODEX_HOME_DIR))
+    fd = os.open(folder / "auth.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({**auth, "tokens": tokens}, fh)
+    return folder
+
+
 def _job_yaml(
     subset: Subset,
     substrate: str,
@@ -498,7 +567,10 @@ def _job_yaml(
     ws: Path | None,
     k: int,
     jobs_dir_abs: Path,
+    login: Path | None = None,
 ) -> str:
+    """The Harbor job for one batch. `login` is the folder from `codex_login_copy` when
+    Codex runs on the Codex login."""
     sel = "\n".join(f"    - {t}" for t in tasks)
     if substrate == "oc":
         harness = _harness_oc(fork=ws is not None)
@@ -515,24 +587,39 @@ def _job_yaml(
         hp = {"CODEX_MODEL": config.SOLVER_MODEL_CX}
         if ws is not None:
             hp["WB_HARNESS_WS"] = str(ws.resolve())
+        hosts = ["host.docker.internal"]
+        mounts = [(config.CODEX_CONTAINER_DIST, "/opt/codex")]
+        if login is None:
+            env_block = (
+                "env_override:\n"
+                f"  VERTEX_PROXY_KEY: {json.dumps(config.VERTEX_PROXY_KEY)}\n"
+                f"  VERTEXAI_LOCATION: {config.VERTEX_REGION}\n"
+                f"  CODEX_BRIDGE_URL: {json.dumps(config.CODEX_CONTAINER_URL)}\n"
+            )
+        else:
+            # Codex reaches its model with the login copy alone: no endpoint and no key.
+            hp["CODEX_LOGIN_FILE"] = f"{CODEX_LOGIN_MOUNT}/auth.json"
+            hp["CODEX_REASONING_EFFORT"] = "high"
+            hosts.append(CODEX_LOGIN_HOST)
+            mounts.append((str(login), CODEX_LOGIN_MOUNT))
+            env_block = ""
         hp_block = ""
         if hp:
             hp_lines = "\n".join(f"  {key}: {json.dumps(val)}" for key, val in sorted(hp.items()))
             hp_block = f"harness_params_override:\n{hp_lines}\n"
         extra = (
             "extra_allowed_hosts:\n"
-            "  - host.docker.internal\n"
-            "environment_override:\n"
+            + "".join(f"  - {host}\n" for host in hosts)
+            + "environment_override:\n"
             "  mounts:\n"
-            "    - type: bind\n"
-            f"      source: {config.CODEX_DIST}\n"
-            "      target: /opt/codex\n"
-            "      read_only: true\n"
-            "env_override:\n"
-            f"  VERTEX_PROXY_KEY: {json.dumps(config.VERTEX_PROXY_KEY)}\n"
-            f"  VERTEXAI_LOCATION: {config.VERTEX_REGION}\n"
-            f"  CODEX_BRIDGE_URL: {json.dumps(config.CODEX_CONTAINER_URL)}\n"
-            f"{hp_block}"
+            + "".join(
+                "    - type: bind\n"
+                f"      source: {source}\n"
+                f"      target: {target}\n"
+                "      read_only: true\n"
+                for source, target in mounts
+            )
+            + f"{env_block}{hp_block}"
         )
     judge = (
         f"llm_judge_override:\n  model: {subset.llm_judge_model}\n"
@@ -543,9 +630,10 @@ def _job_yaml(
         f"# GENERATED by harness2/benchmarks/workbuddy.py -- ephemeral, safe to "
         f"delete. label={label}\n"
     )
+    model = config.WB_SOLVER_MODEL if login is None else WB_CODEX_LOGIN_MODEL
     return (
         head
-        + f"""model: {config.WB_SOLVER_MODEL}
+        + f"""model: {model}
 harness: {harness}
 dataset: datasets/{subset.dataset_id}/tasks
 harness_backend: local
@@ -612,18 +700,23 @@ def run_batch(
         slug = f"{EPHEMERAL_PREFIX}{label_sanitize(label)[:40]}-{digest}"
         yaml_path = config.wb_repo() / "configs" / "jobs" / f"{slug}.yaml"
         label_dir.mkdir(parents=True, exist_ok=True)
-        yaml_path.write_text(
-            _job_yaml(subset, substrate, label, todo, ws, k, label_dir), encoding="utf-8"
-        )
 
         timeout_s = timeout_s or int((len(todo) * k / _conc(substrate)) * 3600 * 1.2 + 900)
         env = {
             **os.environ,
             "NO_FORCE_BUILD": "1",
             "HARNESS2_WB_VERTEX_URL": config.VERTEX_OPENAI_URL + "/chat/completions",
+            "HARNESS2_WB_CODEX_URL": CODEX_LOGIN_URL,
         }
+        login = None
         try:
             with _slots[substrate]:
+                if substrate == "cx" and config.codex_uses_login():
+                    login = codex_login_copy(timeout_s + LOGIN_MARGIN_S)
+                yaml_path.write_text(
+                    _job_yaml(subset, substrate, label, todo, ws, k, label_dir, login),
+                    encoding="utf-8",
+                )
                 _log(f"{label}: {len(todo)} task(s) x k={k} [{substrate}]")
                 proc = subprocess.Popen(
                     ["uv", "run", "./scripts/run.sh", "--job", slug],
@@ -647,6 +740,8 @@ def run_batch(
                     )
         finally:
             yaml_path.unlink(missing_ok=True)
+            if login is not None:
+                shutil.rmtree(login, ignore_errors=True)
         return sorted(set(_run_dirs(label_dir)) - before)
 
 
@@ -960,6 +1055,10 @@ class WbAdapter:
                 )
         if self.substrate.name == "cx":
             self.substrate.preflight(require_dist=True, require_bridge=True)
+            if config.codex_uses_login():
+                problem = codex_login_problem(LOGIN_MARGIN_S)
+                if problem:
+                    raise config.ConfigError(problem)
         else:
             self.substrate.preflight()
 
