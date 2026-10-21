@@ -39,7 +39,7 @@ from ..core import tree as HT
 from ..core.spec import BenchPrompts, BenchSpec, resolve_channel_model
 from ..install import codex_config_error
 from ..substrate.base import Install, RunRequest
-from ..substrate.codex import CodexSubstrate
+from ..substrate.codex import CodexSubstrate, retry_rate_limited, run_failure
 from ..substrate.opencode import OUTPUT_TOKEN_MAX, OpencodeSubstrate
 from .tasks import discover, select
 
@@ -659,7 +659,7 @@ class JobBenchAdapter:
         self.substrate = (
             OpencodeSubstrate(launcher=launcher)
             if substrate == "oc"
-            else CodexSubstrate(launcher=launcher)
+            else CodexSubstrate(launcher=launcher, bench="jb")
         )
         self.timeout = int(timeout or _DEFAULT_TIMEOUT[substrate])
         self.store = Path(store_root) if store_root else config.RUNS / "jb" / "dataset"
@@ -849,7 +849,24 @@ class JobBenchAdapter:
                 "VERTEX_PROXY_KEY": config.VERTEX_PROXY_KEY,
             }
         )
-        self._run_runner(CX_RUNNER, env, wall=t + 600, label=label)
+        out, traj = self._out_dir(task_id, label), self._traj_dir(task_id, label)
+
+        def attempt() -> tuple[str, str] | None:
+            try:
+                self._run_runner(CX_RUNNER, env, wall=t + 600, label=label)
+            except RuntimeError:
+                streams = sorted(traj.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+                failure = run_failure(streams[-1]) if streams else None
+                if failure is None:
+                    raise
+                return failure
+            return None
+
+        def discard() -> None:
+            shutil.rmtree(out, ignore_errors=True)
+            shutil.rmtree(traj, ignore_errors=True)
+
+        retry_rate_limited(attempt, discard, label=f"jb {label}")
         return [self._require_artifacts(task_id, label)]
 
     def _run_runner(self, runner: Path, env: dict, *, wall: int, label: str) -> None:

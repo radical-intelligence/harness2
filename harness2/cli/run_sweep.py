@@ -41,6 +41,7 @@ from pathlib import Path
 from .. import config
 from ..core import schedule
 from ..core.proposer import Proposer
+from ..substrate.codex import CodexUsageLimit
 from . import _common as C
 
 
@@ -118,6 +119,10 @@ def _print_stream(adapter, args, modes) -> int:
     return 0 if stream else 1
 
 
+# The exit status when the Codex login's plan usage ran out and the run stopped early.
+USAGE_LIMIT_EXIT = 3
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse, then run `_main`, printing a misconfiguration as one remediation line."""
     args = _build_parser().parse_args(argv)
@@ -126,6 +131,14 @@ def main(argv: list[str] | None = None) -> int:
     except (config.ConfigError, RuntimeError, ValueError, FileNotFoundError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+    except CodexUsageLimit as e:
+        when = f" after {e.reset}" if e.reset else " once the plan's usage resets"
+        print(
+            f"stopped: {e}\nThe tasks that had not finished were left to run later and are "
+            f"not scored. Run the same command again{when} to continue.",
+            file=sys.stderr,
+        )
+        return USAGE_LIMIT_EXIT
 
 
 def _main(args: argparse.Namespace) -> int:

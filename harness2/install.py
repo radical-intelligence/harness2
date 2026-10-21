@@ -299,12 +299,11 @@ def codex(*, dry_run=False):
             )
         dest = Path(config.CODEX_DIST)
         platform = candidates[0].parent.parent
-        shutil.copytree(platform, dest, dirs_exist_ok=True)
+        # A fresh copy, so that no file of an earlier Codex version stays behind.
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(platform, dest)
         _share_with_containers(dest)
-        binary = dest / "codex"
-        if binary.is_symlink():
-            binary.unlink()
-        binary.symlink_to("bin/codex")
+        (dest / "codex").symlink_to("bin/codex")
     configure_codex(dry_run=dry_run)
 
 

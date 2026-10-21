@@ -43,7 +43,15 @@ from ..core.selection import order_graded_first
 from ..core.spec import BenchPrompts, BenchSpec, resolve_channel_model
 from ..substrate import opencode as OC
 from ..substrate.base import Install, RunRequest
-from ..substrate.codex import CODEX_SURFACE, CodexSubstrate, login_command, login_error
+from ..substrate.codex import (
+    CODEX_SURFACE,
+    CodexRateLimited,
+    CodexSubstrate,
+    login_command,
+    login_error,
+    retry_rate_limited,
+    run_failure,
+)
 from ..substrate.opencode import OPENCODE_SURFACE, OpencodeSubstrate
 from . import wb_render as RENDER
 from .tasks import discover, select
@@ -780,7 +788,7 @@ class WbAdapter:
         self.substrate = (
             OpencodeSubstrate(launcher=self._launch)
             if substrate == "oc"
-            else CodexSubstrate(launcher=self._launch)
+            else CodexSubstrate(launcher=self._launch, bench=f"wb --subset {subset}")
         )
 
     def tasks(self, split: str = "all") -> list[str]:
@@ -882,19 +890,49 @@ class WbAdapter:
                 and self._identity_matches(t)
             )
 
-        new_dirs = run_batch(
-            self.subset_info,
-            self.substrate.name,
-            self._label_dir(label),
-            label,
-            [req.task_ref],
-            ws,
-            k,
-            done=lambda tid: _have(tid) >= k,
-            need=lambda tid: k - _have(tid),
-            timeout_s=req.timeout or None,
-        )
-        fresh = [t for t in _trials_in(new_dirs, req.task_ref, self.subset) if _trial_finished(t)]
+        fresh: list[Path] = []
+        failed: list[Path] = []
+
+        def attempt() -> tuple[str, str] | None:
+            """One Harbor batch for the trials still missing. Trials that Codex stopped on
+            HTTP 429 or on the usage limit are kept apart in `failed`."""
+            new_dirs = run_batch(
+                self.subset_info,
+                self.substrate.name,
+                self._label_dir(label),
+                label,
+                [req.task_ref],
+                ws,
+                k,
+                done=lambda tid: _have(tid) + len(fresh) >= k,
+                need=lambda tid: k - _have(tid) - len(fresh),
+                timeout_s=req.timeout or None,
+            )
+            failed.clear()
+            worst = None
+            for t in _trials_in(new_dirs, req.task_ref, self.subset):
+                failure = None
+                if self.substrate.name == "cx":
+                    agent = t / "agent"
+                    failure = run_failure(agent / "codex-output.jsonl", agent / "codex-stderr.log")
+                if failure is not None:
+                    failed.append(t)
+                    if worst is None or failure[0] == "usage_limit":
+                        worst = failure
+                elif _trial_finished(t):
+                    fresh.append(t)
+            return worst
+
+        def discard() -> None:
+            for t in failed:
+                shutil.rmtree(t, ignore_errors=True)
+
+        try:
+            retry_rate_limited(attempt, discard, label=f"wb {label} / {req.task_ref}")
+        except CodexRateLimited:
+            if not fresh:
+                raise
+            _log(f"{label}: keeping {len(fresh)} of {k} trial(s); the rest stopped on HTTP 429")
         return self._rank(fresh)
 
     def execute(

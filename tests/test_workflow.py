@@ -378,6 +378,7 @@ class CodexLoginTests(unittest.TestCase):
         dist = Path(temporary.name) / "dist"
         dist.mkdir()
         (dist / "codex").write_text("")
+        (dist / "codex-package.json").write_text(json.dumps({"version": config.CODEX_VERSION}))
         patch.multiple(
             config,
             CODEX_AUTH="chatgpt",
@@ -434,6 +435,7 @@ class CodexLoginTests(unittest.TestCase):
             codex_substrate.CodexSubstrate().preflight(require_dist=True, require_bridge=True)
         linux.mkdir()
         (linux / "codex").write_text("")
+        (linux / "codex-package.json").write_text(json.dumps({"version": config.CODEX_VERSION}))
         codex_substrate.CodexSubstrate().preflight(require_dist=True, require_bridge=True)
 
     def test_codex_runs_need_the_codex_and_improver_models_only(self):
@@ -688,6 +690,20 @@ class PortabilityTests(unittest.TestCase):
             self.skipTest("no /bin/bash")
         runner = config.ROOT / "third_party/jb_runner/run_benchmark_codex_cli_adapt.sh"
         subprocess.run(["/bin/bash", "-n", str(runner)], check=True)
+
+
+class CodexVersionTests(unittest.TestCase):
+    def test_every_runner_names_the_pinned_codex_version(self):
+        version = config.CODEX_VERSION
+        harness = config.ROOT / "third_party/wb_runner/configs/harnesses/codex-harness"
+        versions = sorted(p.name for p in (harness / "versions").glob("*.yaml"))
+        self.assertEqual(versions, [f"{version}.yaml"])
+        self.assertIn(
+            f'CODEX_VERSION: "{version}"', (harness / "versions" / f"{version}.yaml").read_text()
+        )
+        self.assertEqual(config.WB_CX_HARNESS_VER, version)
+        lab = config.ROOT / "third_party/lab_runner/adapt_runs_cx/run_codex_lab.py"
+        self.assertIn(f'"codex-cli {version}"', lab.read_text())
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ from ..core import runmark as RM
 from ..core import tree as HT
 from ..core.spec import BenchPrompts, BenchSpec, resolve_channel_model
 from ..substrate.base import Install, RunRequest
-from ..substrate.codex import CODEX_SURFACE, CodexSubstrate
+from ..substrate.codex import CODEX_SURFACE, CodexSubstrate, retry_rate_limited, run_failure
 from ..substrate.opencode import OPENCODE_SURFACE, OpencodeSubstrate
 from .tasks import discover, select
 
@@ -523,7 +523,7 @@ class LabAdapter:
             self.model = model or config.SOLVER_MODEL_OC
             self._results_root = config.RUNS / "lab" / "results" / "oc"
         else:
-            self.substrate = CodexSubstrate(launcher=self._launch_cx)
+            self.substrate = CodexSubstrate(launcher=self._launch_cx, bench="lab")
             self.model = model or config.SOLVER_MODEL_CX
 
             self._results_root = config.RUNS / "lab" / "results" / "cx"
@@ -720,20 +720,33 @@ class LabAdapter:
                 env["VERTEX_PROXY_KEY"] = config.VERTEX_PROXY_KEY
             if config.codex_uses_login():
                 env["ADAPT_LABCX_AUTH_FILE"] = str(config.CODEX_HOME_DIR / "auth.json")
+            out = self._run_dir(run_id)
 
-            try:
-                run_detached(
-                    cmd,
-                    cwd=config.lab_repo(),
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=req.timeout + 900,
-                )
-            except subprocess.TimeoutExpired:
-                print(f"  [lab-cx] runner wall-timeout for {req.task_ref} @ {run_id}", flush=True)
-            dirs.append(self._run_dir(run_id))
+            def attempt() -> tuple[str, str] | None:
+                try:
+                    run_detached(
+                        cmd,
+                        cwd=config.lab_repo(),
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=req.timeout + 900,
+                    )
+                except subprocess.TimeoutExpired:
+                    print(
+                        f"  [lab-cx] runner wall-timeout for {req.task_ref} @ {run_id}",
+                        flush=True,
+                    )
+                except RuntimeError:
+                    failure = run_failure(out / "codex_session.jsonl", out / "codex_stderr.log")
+                    if failure is None:
+                        raise
+                    return failure
+                return None
+
+            retry_rate_limited(attempt, lambda: self._safe_rmtree(out), label=f"lab {run_id}")
+            dirs.append(out)
         return dirs
 
     def _safe_rmtree(self, d: Path) -> None:
