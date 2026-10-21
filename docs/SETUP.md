@@ -100,8 +100,8 @@ starting. harness2 runs each session with `claude -p`:
   Cloud settings, so it uses the login;
 - without your own Claude Code settings, `CLAUDE.md`, plugins, hooks and MCP
   servers;
-- able to read and change files only in its session folder: Claude Code refuses
-  anything that would need approval, such as running a script;
+- with shell commands allowed, and with its file tools (read, write and edit)
+  limited to its session folder. Shell commands are not limited to that folder;
 - without saving it to your Claude Code history. Its prompt and reply are kept
   under `runs/<benchmark>/adapt/_audit/`.
 

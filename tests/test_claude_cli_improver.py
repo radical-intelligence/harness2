@@ -125,6 +125,7 @@ class ClaudeCliSessionTests(unittest.TestCase):
         self.assertEqual(cmd[:2], ["/usr/local/bin/claude", "-p"])
         self.assertEqual(cmd[cmd.index("--model") + 1], "sonnet")
         self.assertEqual(cmd[cmd.index("--permission-mode") + 1], "acceptEdits")
+        self.assertEqual(cmd[cmd.index("--allowedTools") + 1], "Bash")
         self.assertEqual(cmd[cmd.index("--setting-sources") + 1], "project,local")
         self.assertIn("--strict-mcp-config", cmd)
         self.assertIn("--no-session-persistence", cmd)

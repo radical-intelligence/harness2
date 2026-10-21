@@ -245,10 +245,11 @@ class Proposer:
         self, cwd: Path, mission: str, system: str, wall: int
     ) -> tuple[str, float, str]:
         cli = shutil.which("claude") or "claude"
-        # acceptEdits lets the session read and change files in its own folder only, and
-        # refuses anything that would need approval. The user's own settings, CLAUDE.md,
-        # plugins, hooks and MCP servers are left out, and the session is not saved to
-        # their history: the audit folder keeps the prompt and the reply.
+        # acceptEdits keeps the file tools (Read, Write, Edit) inside the session's own folder.
+        # Shell commands are allowed, as in OpenCode sessions, and are not limited to the
+        # folder. The user's own settings, CLAUDE.md, plugins, hooks and MCP servers are left
+        # out, and the session is not saved to their history: the audit folder keeps the
+        # prompt and the reply.
         cmd = [
             cli,
             "-p",
@@ -260,6 +261,8 @@ class Proposer:
             self.spec.effort,
             "--permission-mode",
             "acceptEdits",
+            "--allowedTools",
+            "Bash",
             "--setting-sources",
             "project,local",
             "--strict-mcp-config",
