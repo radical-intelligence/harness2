@@ -16,19 +16,23 @@
 
 Carries the c1..c8 surface (CODEX_SURFACE), the one install mode (codex_root: AGENTS.md,
 .agents, scripts and .codex copied to the workspace root, where `codex exec -C <ws>` finds
-them), the `codex exec` flag contract, and the codex thread-item trajectory renderer.
-Per-deployment differences are values in Install.extras, never subclasses.
+them), the `codex exec` flag contract, and the codex thread-item trajectory renderer. It
+also checks the installed Codex version and handles runs that Codex stopped on HTTP 429 or
+on the plan's usage limit. Per-deployment differences are values in Install.extras, never
+subclasses.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import tempfile
+import time
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 from .. import config
 from ..core import runmark as RM
@@ -111,8 +115,10 @@ class CodexSubstrate:
 
     name = "cx"
 
-    def __init__(self, launcher: Launcher | None = None):
+    def __init__(self, launcher: Launcher | None = None, *, bench: str = "<bench>"):
         self._launcher = launcher
+        # The benchmark's setup name, for the setup command in error messages.
+        self.bench = bench
 
     def surface(self) -> SurfaceSpec:
         return CODEX_SURFACE
@@ -205,16 +211,16 @@ class CodexSubstrate:
         )
 
     def preflight(self, *, require_dist: bool = False, require_bridge: bool = False) -> None:
-        """Check the CLI and Responses endpoint (or the Codex login), including containers."""
+        """Check the installed Codex builds, then the Codex login or the Responses endpoint.
+
+        `require_dist` adds the Linux build that WorkBuddy-Bench mounts into its containers.
+        """
         from urllib.parse import urlparse
 
+        problem = install_error(self.bench, containers=require_dist)
+        if problem:
+            raise RuntimeError(problem)
         if config.codex_uses_login():
-            if not (Path(config.CODEX_DIST) / "codex").is_file():
-                raise RuntimeError(
-                    "Codex is not installed; run harness2-setup <bench> --substrate cx"
-                )
-            if require_dist:
-                _check_container_dist()
             problem = login_error()
             if problem:
                 raise config.ConfigError(problem)
@@ -225,13 +231,6 @@ class CodexSubstrate:
         url = urlparse(config.CODEX_BASE_URL)
         if url.scheme not in ("http", "https") or not url.hostname:
             raise config.ConfigError("HARNESS2_CODEX_BASE_URL must be an HTTP(S) URL")
-        binary = Path(config.CODEX_DIST) / "codex"
-        if not binary.is_file():
-            raise RuntimeError(
-                "Codex is not installed; run scripts/setup_benchmark.py with --substrate cx"
-            )
-        if require_dist:
-            _check_container_dist()
         if require_bridge and not config.CODEX_CONTAINER_URL:
             raise RuntimeError(
                 "Set HARNESS2_CODEX_CONTAINER_URL to a container-accessible Responses endpoint"
@@ -277,13 +276,136 @@ def login_error() -> str | None:
     return None
 
 
-def _check_container_dist() -> None:
-    """WorkBuddy-Bench mounts this Linux build of Codex into its containers."""
-    if not (Path(config.CODEX_CONTAINER_DIST) / "codex").is_file():
-        raise RuntimeError(
-            "Codex for WorkBuddy-Bench's Linux containers is not installed; "
-            "run harness2-setup wb --substrate cx"
+def installed_version(dist: Path) -> str | None:
+    """The version of the Codex build in `dist`, read from the codex-package.json that
+    Codex's npm package ships with it; None when that file is missing or unreadable."""
+    try:
+        meta = json.loads((Path(dist) / "codex-package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    version = meta.get("version") if isinstance(meta, dict) else None
+    return version if isinstance(version, str) else None
+
+
+def install_error(bench: str, *, containers: bool = False) -> str | None:
+    """Why the installed Codex cannot be used: it is missing, or it is not the pinned
+    config.CODEX_VERSION. None when it can be used.
+
+    `containers` adds the Linux build that WorkBuddy-Bench mounts into its containers. On
+    a Linux machine that is the same build.
+    """
+    setup = f"harness2-setup {bench} --substrate cx"
+    builds = [("Codex", Path(config.CODEX_DIST))]
+    if containers and config.CODEX_CONTAINER_DIST != config.CODEX_DIST:
+        builds.append(
+            ("Codex for WorkBuddy-Bench's Linux containers", Path(config.CODEX_CONTAINER_DIST))
         )
+    for name, dist in builds:
+        if not (dist / "codex").is_file():
+            return f"{name} is not installed in {dist}; run: {setup}"
+        found = installed_version(dist)
+        if found != config.CODEX_VERSION:
+            return (
+                f"{name} in {dist} is version {found or 'unknown'}, but harness2 uses "
+                f"{config.CODEX_VERSION}; run: {setup}"
+            )
+    return None
+
+
+# How a `codex exec` run ends when the model service, not the task, stopped it. Codex
+# retries HTTP 429 itself before it gives up with RATE_LIMITED. Codex 0.144.6 writes
+# "You've hit your usage limit", 0.163.0 "You’ve hit your usage limit".
+RATE_LIMITED = "exceeded retry limit, last status: 429"
+USAGE_LIMIT = "hit your usage limit"
+
+
+class CodexUsageLimit(BaseException):
+    """The Codex login's plan has no usage left, so every further rollout would fail too.
+
+    It derives from BaseException, as KeyboardInterrupt does, so that the per-rollout and
+    per-task error handling does not record it as a failed rollout or task: it stops the
+    whole run, and the tasks it did not finish run when the same command is started again.
+    """
+
+    def __init__(self, message: str):
+        found = re.search(r"try again at ([^.()\n]+)", message, re.IGNORECASE)
+        self.reset = found.group(1).strip() if found else ""
+        super().__init__(f"the Codex plan's usage limit is reached; Codex said: {message.strip()}")
+
+
+class CodexRateLimited(RuntimeError):
+    """Codex still stopped on HTTP 429 after harness2's retries: a connection failure, not a
+    task result."""
+
+
+def run_failure(stream: Path, stderr: Path | None = None) -> tuple[str, str] | None:
+    """("usage_limit" or "rate_limited", Codex's message) when a `codex exec --json` run
+    stopped on the plan's usage limit or on HTTP 429; None otherwise.
+
+    Only Codex's own messages are read: the `error` and `turn.failed` events of the JSON
+    stream and the lines of its stderr log. Command output in the stream is not read, and
+    a run whose turn completed never counts.
+    """
+    messages = []
+    try:
+        raw = Path(stream).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        raw = ""
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "turn.completed":
+            return None
+        if event.get("type") == "error":
+            messages.append(_text_of(event))
+        elif event.get("type") == "turn.failed":
+            messages.append(_text_of(event.get("error")))
+    if stderr is not None:
+        try:
+            messages += Path(stderr).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            pass
+    for kind, mark in (("usage_limit", USAGE_LIMIT), ("rate_limited", RATE_LIMITED)):
+        for message in messages:
+            if mark in message:
+                return kind, message.strip()
+    return None
+
+
+def retry_rate_limited(
+    attempt: Callable[[], tuple[str, str] | None], discard: Callable[[], None], *, label: str
+) -> None:
+    """Run one Codex rollout through `attempt`, which returns `run_failure` for it.
+
+    When the rollout stopped on HTTP 429, `discard` removes what it left, and it runs again
+    from a fresh start after each wait in config.CODEX_429_WAITS. If it still stops on 429
+    after the last wait, CodexRateLimited records a connection failure. When the plan's
+    usage limit is reached, waiting does not help: CodexUsageLimit stops the run at once.
+    """
+    waits = config.CODEX_429_WAITS
+    for retry in range(len(waits) + 1):
+        failure = attempt()
+        if failure is None:
+            return
+        kind, message = failure
+        discard()
+        if kind == "usage_limit":
+            raise CodexUsageLimit(message)
+        if retry == len(waits):
+            raise CodexRateLimited(
+                f"{label}: Codex still stopped on HTTP 429 after {len(waits)} retries "
+                f"({message}); a connection failure, not a task result"
+            )
+        print(
+            f"  [codex] {label}: Codex stopped on HTTP 429 ({message}); waiting "
+            f"{waits[retry]:g} s, then retry {retry + 1} of {len(waits)} from a fresh start",
+            flush=True,
+        )
+        time.sleep(waits[retry])
 
 
 _TRUNC_FMT = "…(+{n} chars — render truncation)"

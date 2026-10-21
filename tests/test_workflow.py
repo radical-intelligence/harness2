@@ -378,6 +378,7 @@ class CodexLoginTests(unittest.TestCase):
         dist = Path(temporary.name) / "dist"
         dist.mkdir()
         (dist / "codex").write_text("")
+        (dist / "codex-package.json").write_text(json.dumps({"version": config.CODEX_VERSION}))
         patch.multiple(
             config,
             CODEX_AUTH="chatgpt",
@@ -434,6 +435,7 @@ class CodexLoginTests(unittest.TestCase):
             codex_substrate.CodexSubstrate().preflight(require_dist=True, require_bridge=True)
         linux.mkdir()
         (linux / "codex").write_text("")
+        (linux / "codex-package.json").write_text(json.dumps({"version": config.CODEX_VERSION}))
         codex_substrate.CodexSubstrate().preflight(require_dist=True, require_bridge=True)
 
     def test_codex_runs_need_the_codex_and_improver_models_only(self):

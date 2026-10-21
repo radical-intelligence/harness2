@@ -24,6 +24,7 @@ import json
 import os
 import random
 import re
+import threading
 import traceback
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -680,8 +681,13 @@ def run_domain(
     tag: str = "",
     selector_prop: Proposer | None = None,
     pool_policy: str = "finals",
+    stop: threading.Event | None = None,
 ) -> dict:
-    """Every task in one domain, in `stream_order()` order, threading the library forward."""
+    """Every task in one domain, in `stream_order()` order, threading the library forward.
+
+    A task that ends on a BaseException, such as the Codex usage limit, stops the run: it
+    sets `stop`, so that the other domains running at the same time start no new task.
+    """
     surface = adapter.substrate.surface()
     libs = {
         mode: library_store.Library(root=Path(library_root) / mode, domain=domain, surface=surface)
@@ -696,6 +702,8 @@ def run_domain(
         "tasks": [],
     }
     for i, tid in enumerate(task_ids, 1):
+        if stop is not None and stop.is_set():
+            break
         try:
             for lib in libs.values():
                 lib.retain(task_ids[: i - 1])
@@ -727,6 +735,10 @@ def run_domain(
         except Exception as exc:
             out["failed"] += 1
             row = {"task": tid, "status": "exception", "error": f"{type(exc).__name__}: {exc}"}
+        except BaseException:
+            if stop is not None:
+                stop.set()
+            raise
         out["tasks"].append(row)
         err = f"  :: {row['error']}" if row.get("error") else ""
         print(f"  [{domain}] {i}/{len(task_ids)} {row['status']:<12} {tid}{err}", flush=True)
@@ -809,6 +821,7 @@ def run_sweep(
     started = datetime.now(timezone.utc).isoformat()
     rows = []
     selector = _selector_for(adapter, prop, selector_prop)
+    stop = threading.Event()
     with ThreadPoolExecutor(max_workers=domain_parallel) as pool:
         futs = {
             pool.submit(
@@ -825,6 +838,7 @@ def run_sweep(
                 tag=tag,
                 selector_prop=selector,
                 pool_policy=pool_policy,
+                stop=stop,
             ): d
             for d in order
         }

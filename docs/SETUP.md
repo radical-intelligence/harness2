@@ -217,6 +217,26 @@ changing either. `harness2-check` reports stale configuration until then.
 Codex runs with its sandbox disabled. Review the
 [executor network restrictions](EXPERIMENTS.md#web-access) before evaluation.
 
+### Codex version, rate limits and usage limits
+
+- harness2 uses Codex 0.163.0 (`CODEX_VERSION` in `harness2/config.py`).
+  `harness2-check` and the check before every run compare the installed Codex
+  with it, and for WorkBuddy-Bench also the Linux build for the containers. When
+  one is missing or another version, they stop and print the `harness2-setup`
+  command that installs it. Setup replaces the whole Codex folder, so no file of
+  an earlier version stays behind.
+- Codex retries a request that gets HTTP 429 (too many requests) itself. When it
+  gives up ("exceeded retry limit, last status: 429"), harness2 deletes that
+  rollout, waits, and runs it again from the start: after 1, 2 and then 4
+  minutes. Each wait is logged. If the last try also ends on 429, the rollout is
+  recorded as a connection failure, not as a task result. Set the waits in
+  seconds with `HARNESS2_CODEX_429_WAITS` (default `60,120,240`).
+- When the Codex login's plan has no usage left ("You've hit your usage limit"),
+  waiting does not help. harness2 stops the whole run with exit status 3 and
+  prints Codex's message, with the time Codex says to try again when it gives
+  one. Tasks that had not finished are not scored; running the same command
+  again after that time continues with them.
+
 ## Network access during setup
 
 Setup downloads dependencies from the following hosts:
