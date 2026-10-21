@@ -188,6 +188,13 @@ def codex_uses_login() -> bool:
     return CODEX_AUTH == "chatgpt"
 
 
+# The Codex build mounted into WorkBuddy-Bench's Linux containers. On a Linux host it is
+# the host's own build; on another system setup installs a Linux build here.
+CODEX_CONTAINER_DIST = (
+    CODEX_DIST if sys.platform == "linux" else str(DEPENDENCIES / "codex" / "linux-dist")
+)
+
+
 WB_SOLVER_MODEL = "harness2/solver"
 WB_WEB_JUDGE = "harness2/judge"
 WB_RENDER_PY = sys.executable

@@ -150,11 +150,33 @@ About the login:
 - It is separate from your `~/.codex`. Codex renews a login by rewriting its file,
   and renewing one copy can end the session another copy holds.
 - Every Codex run on JobBench and LAB uses this one file, and Codex renews it in
-  place about every 8 days. OpenAI recommends one login file per concurrent job:
+  place shortly before its access token expires, about every 10 days. OpenAI recommends one login file per concurrent job:
   if two runs renew it at the same moment, one of them can fail. Running the same
   command again resumes it.
-- WorkBuddy-Bench runs Codex inside Docker and cannot use the login. Use an
-  endpoint and key for it.
+- WorkBuddy-Bench runs Codex inside Docker containers, on copies of the login;
+  see the next section.
+
+#### Codex login in WorkBuddy-Bench
+
+Install with `harness2-setup wb --subset <subset> --substrate cx`, then log in
+and check as above with `--bench wb --subset <subset>`.
+
+- For each batch of runs, harness2 writes a copy of the login into a new folder
+  in `HARNESS2_CODEX_HOME`, mounts that folder read-only into the batch's
+  containers, and deletes it when the batch ends. Each container copies the file
+  into Codex's own folder and deletes that copy when Codex exits. Commands, logs
+  and the job file name the file but never contain its tokens.
+- The copy has no refresh token, so Codex cannot renew the login inside a
+  container. A renewal replaces the refresh token, so a renewal there would be
+  lost with the container and could end the session that the shared login holds.
+- Before each batch, harness2 checks that the access token stays valid until the
+  batch's time limit, so that Codex never needs to renew it in a container. When
+  it does not, harness2 stops; run the `codex login` command above again.
+  `harness2-check` reports an access token that expires within 10 minutes.
+- The containers reach the model at `chatgpt.com`. For tasks with restricted
+  network access, the job adds that host to the allowed hosts.
+- Codex runs with its sandbox disabled, so the task agent can read the access
+  token in the copy.
 
 ### Endpoint and key
 

@@ -104,7 +104,8 @@ hosts for the executor to reduce access to benchmark data and grading criteria:
 - `huggingface.co`, `hf.co`, and `*.hf.co`
 - `github.com` and `raw.githubusercontent.com`, for benchmark repositories
 
-Setup itself needs these hosts to download dependencies and data. Codex runs
+Setup itself needs these hosts to download dependencies and data. Keep
+`chatgpt.com` reachable for Codex on the Codex login. Codex runs
 with its sandbox disabled, so apply restrictions at the network level, such as
 an egress firewall or DNS policy on the executor host, rather than relying on a
 tool setting. Report the restrictions used alongside results.
