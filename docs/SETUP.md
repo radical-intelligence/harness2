@@ -49,7 +49,8 @@ have access to each configured model.
 | Setting | Meaning |
 |---|---|
 | `HARNESS2_SOLVER_MODEL` | Executor model in OpenCode's `provider/model` format |
-| `HARNESS2_IMPROVER_MODEL` | Improver model in the same format; defaults to the executor |
+| `HARNESS2_IMPROVER_CHANNEL` | How the improvement agents run: `opencode` (default) or `claude_cli`, the `claude` command on its own login. See [Improvement agents on a Claude login](#improvement-agents-on-a-claude-login) |
+| `HARNESS2_IMPROVER_MODEL` | Improver model. With `opencode`, in OpenCode's `provider/model` format; defaults to the executor. With `claude_cli`, a Claude model name such as `sonnet`, `opus` or a full `claude-…` ID; required |
 | `HARNESS2_JUDGE_MODEL` | Bare judge model ID; the adapter supplies the Vertex prefix for Gemini IDs, and on LAB also for Claude IDs |
 | `HARNESS2_SOLVER_BASE_URL`, `HARNESS2_SOLVER_API_KEY` | WorkBuddy-Bench only. Endpoint and API key for the executor model: any service that speaks the OpenAI chat API, such as OpenRouter, OpenAI or Ollama. Leave unset to use Vertex AI. See [WorkBuddy-Bench](BENCHMARKS.md#workbuddy-bench) |
 | `HARNESS2_JUDGE_BASE_URL`, `HARNESS2_JUDGE_API_KEY` | JobBench and the WorkBuddy-Bench web subset. Endpoint and API key for the judge model, on the same kind of service. Leave unset to use Vertex AI. See [JobBench](BENCHMARKS.md#jobbench) |
@@ -79,6 +80,35 @@ Credentials can use that account. Other options include:
 Keep `gcloud` on `PATH` for these Vertex configurations, including the key-file
 route: the installation check runs
 `gcloud auth application-default print-access-token`.
+
+### Improvement agents on a Claude login
+
+The improvement agents (editor, composer, selector and reflector) can run
+through the `claude` command (Claude Code) instead of OpenCode, on the Claude
+account it is logged in to. Install Claude Code, log in with `claude auth login`,
+and set:
+
+```bash
+HARNESS2_IMPROVER_CHANNEL=claude_cli
+HARNESS2_IMPROVER_MODEL=sonnet      # or opus, or a full claude-... ID
+```
+
+`harness2-check` and each run check the login with `claude auth status` before
+starting. harness2 runs each session with `claude -p`:
+
+- without an Anthropic API key and without Vertex AI, Bedrock, Foundry or Google
+  Cloud settings, so it uses the login;
+- without your own Claude Code settings, `CLAUDE.md`, plugins, hooks and MCP
+  servers;
+- able to read and change files only in its session folder: Claude Code refuses
+  anything that would need approval, such as running a script;
+- without saving it to your Claude Code history. Its prompt and reply are kept
+  under `runs/<benchmark>/adapt/_audit/`.
+
+The sessions count against the plan's usage limits. The cost harness2 records
+for them is the API price that `claude` reports, not an amount billed to the
+plan. Do not log OpenCode in with a Claude account: using a Claude login in
+other tools is not allowed.
 
 ## Benchmark installation
 
